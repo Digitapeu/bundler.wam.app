@@ -15,7 +15,7 @@ import { ExecutionErrors, UserOperation, ValidationErrors } from './modules/Type
 import { getLogsChunked } from './utils/getLogsChunked'
 
 const HEX_REGEX = /^0x[a-fA-F\d]*$/i
-const MAX_RANGE = 5_000; // tune for your RPC’s block-range cap
+const MAX_RANGE = 2_000; // Conservative limit to work with most RPC providers
 
 /**
  * return value from estimateUserOpGas
