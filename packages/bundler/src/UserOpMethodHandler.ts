@@ -1,4 +1,4 @@
-import { BigNumber, BigNumberish, Signer } from 'ethers'
+import { BigNumber, BigNumberish, Signer, providers } from 'ethers'
 import { Log, Provider } from '@ethersproject/providers'
 
 import { BundlerConfig } from './BundlerConfig'
@@ -12,8 +12,10 @@ import { ExecutionManager } from './modules/ExecutionManager'
 import { getAddr } from './modules/moduleUtils'
 import { UserOperationByHashResponse, UserOperationReceipt } from './RpcTypes'
 import { ExecutionErrors, UserOperation, ValidationErrors } from './modules/Types'
+import { getLogsChunked } from './utils/getLogsChunked'
 
 const HEX_REGEX = /^0x[a-fA-F\d]*$/i
+const _maxLogRange = 2_000; // tune for your RPC’s block-range cap
 
 /**
  * return value from estimateUserOpGas
@@ -174,7 +176,7 @@ export class UserOpMethodHandler {
   // filter full bundle logs, and leave only logs for the given userOpHash
   // @param userOpEvent - the event of our UserOp (known to exist in the logs)
   // @param logs - full bundle logs. after each group of logs there is a single UserOperationEvent with unique hash.
-  _filterLogs (userOpEvent: UserOperationEventEvent, logs: Log[]): Log[] {
+  ___filterLogs (userOpEvent: UserOperationEventEvent, logs: Log[]): Log[] {
     let startIndex = -1
     let endIndex = -1
     const events = Object.values(this.entryPoint.interface.events)
@@ -203,6 +205,78 @@ export class UserOpMethodHandler {
     return logs.slice(startIndex + 1, endIndex)
   }
 
+  /**
+ * Fetch logs chunked from the RPC and return only the logs for the *executed section*
+ * of the bundle that contains the given userOpHash: i.e., logs strictly after the last
+ * `BeforeExecution` and up to (excluding) the matching `UserOperationEvent`.
+ *
+ * @param userOpEvent The known `UserOperationEvent` for this userOpHash (already located)
+ * @param fromBlock   Lower bound to search (number)
+ * @param toBlock     Upper bound to search (number | 'latest'), defaults to 'latest'
+ */
+  async _filterLogs(
+    this: any,
+    userOpEvent: UserOperationEventEvent,
+    logs: Log[] = []
+  ): Promise<Log[]> {
+    // If no logs were supplied, fetch only the two relevant topics in chunks.
+    if (!logs || logs.length === 0) {
+      const provider = this.provider; // JsonRpcProvider / Web3Provider
+      const entryPoint = this.entryPoint;
+  
+      // Event topics we need to reconstruct the execution slice:
+      const beforeExecutionTopic = entryPoint.interface.getEventTopic(
+        Object.values(entryPoint.interface.events).find((e: any) => e.name === 'BeforeExecution')!
+      );
+      const userOperationEventTopic = entryPoint.interface.getEventTopic(
+        Object.values(entryPoint.interface.events).find((e: any) => e.name === 'UserOperationEvent')!
+      );
+  
+      // Numeric block window around the event; widen/narrow to taste.
+      const currentBlock: number = await provider.getBlockNumber();
+      const fromBlock = Math.max(0, userOpEvent.blockNumber - 10_000);
+      const toBlock   = Math.min(currentBlock, userOpEvent.blockNumber + 200);
+  
+      // topics[0] supports OR with an array → fetch only the two event signatures we need.
+      const filter = {
+        address: entryPoint.address,
+        topics: [[beforeExecutionTopic, userOperationEventTopic]],
+      };
+  
+      // Use your existing helper; it must accept numeric bounds.
+      logs = await getLogsChunked(provider, filter, fromBlock, toBlock, MAX_RANGE);
+    }
+  
+    // Original slicing logic unchanged.
+    let startIndex = -1;
+    let endIndex = -1;
+  
+    const events = Object.values(this.entryPoint.interface.events);
+    const beforeExecutionTopic = this.entryPoint.interface.getEventTopic(
+      events.find((e: any) => e.name === 'BeforeExecution')!
+    );
+  
+    logs.forEach((log, index) => {
+      if (log?.topics[0] === beforeExecutionTopic) {
+        // all UserOp execution events start after the "BeforeExecution" event.
+        startIndex = endIndex = index;
+      } else if (log?.topics[0] === userOpEvent.topics[0]) {
+        // process UserOperationEvent
+        if (log.topics[1] === userOpEvent.topics[1]) {
+          // it's our userOpHash. save as end of logs array
+          endIndex = index;
+        } else if (endIndex === -1) {
+          // different hash and end not found yet → shift start
+          startIndex = index;
+        }
+      }
+    });
+  
+    if (endIndex === -1) {
+      throw new Error('fatal: no UserOperationEvent in logs');
+    }
+    return logs.slice(startIndex + 1, endIndex);
+  }
   async getUserOperationByHash (userOpHash: string): Promise<UserOperationByHashResponse | null> {
     requireCond(userOpHash?.toString()?.match(HEX_REGEX) != null, 'Missing/invalid userOpHash', -32601)
     const event = await this._getUserOperationEvent(userOpHash)
@@ -268,7 +342,7 @@ export class UserOpMethodHandler {
       return null
     }
     const receipt = await event.getTransactionReceipt()
-    const logs = this._filterLogs(event, receipt.logs)
+    const logs = await this._filterLogs(event, receipt.logs)
     return deepHexlify({
       userOpHash,
       sender: event.args.sender,
