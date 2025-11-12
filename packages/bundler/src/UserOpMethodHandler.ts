@@ -15,7 +15,7 @@ import { ExecutionErrors, UserOperation, ValidationErrors } from './modules/Type
 import { getLogsChunked } from './utils/getLogsChunked'
 
 const HEX_REGEX = /^0x[a-fA-F\d]*$/i
-const MAX_RANGE = 2_000; // Conservative limit to work with most RPC providers
+const MAX_RANGE = 100; // Very conservative limit for strict RPC providers like Chainstack
 
 /**
  * return value from estimateUserOpGas

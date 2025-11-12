@@ -1,7 +1,7 @@
 import { providers } from 'ethers';
 import { Log } from '@ethersproject/providers';
 
-const DEFAULT_MAX_RANGE = 2000; // tune to your RPC cap
+const DEFAULT_MAX_RANGE = 100; // Very conservative limit for strict RPC providers like Chainstack
 
 export async function getLogsChunked(
   provider: providers.JsonRpcProvider,

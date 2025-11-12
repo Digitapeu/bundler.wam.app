@@ -9,7 +9,7 @@ import { getLogsChunked } from '../utils/getLogsChunked'
 import { providers } from 'ethers'
 
 const debug = Debug('aa.events')
-const MAX_RANGE = 2_000 // Conservative limit to work with most RPC providers
+const MAX_RANGE = 100; // Very conservative limit for strict RPC providers like Chainstack
 
 /**
  * listen to events. trigger ReputationManager's Included
