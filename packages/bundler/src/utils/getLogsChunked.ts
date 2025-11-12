@@ -3,7 +3,7 @@ import { Log } from '@ethersproject/providers';
 
 const DEFAULT_MAX_RANGE = 2000; // tune to your RPC cap
 
-async function getLogsChunked(
+export async function getLogsChunked(
   provider: providers.JsonRpcProvider,
   base: providers.Filter,
   opts?: { maxRange?: number }
