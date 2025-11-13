@@ -27,22 +27,73 @@ export class EventsManager {
    * automatically listen to all UserOperationEvent events
    */
   initEventListener (): void {
-    // Note: .on() listeners typically only listen for new events going forward,
-    // but we specify a recent fromBlock to be safe and avoid any potential
-    // queries from contract deployment
-    const filter = this.entryPoint.filters.UserOperationEvent()
+    // IMPORTANT: We cannot use ethers' built-in .on() listener because it may
+    // internally call getLogs with large block ranges that exceed RPC limits.
+    // Instead, we'll use a manual polling mechanism with our chunked approach.
     
-    // Override the fromBlock to avoid querying from contract deployment
-    // This only affects the initial sync, not the ongoing listening
-    const safeFilter = {
-      ...filter,
-      fromBlock: 'latest'
+    // Store the last processed block to avoid reprocessing
+    let lastProcessedBlock: number | undefined
+    
+    // Poll for new events every few seconds
+    const pollInterval = 5000 // 5 seconds
+    
+    const pollForEvents = async () => {
+      try {
+        const provider = this.entryPoint.provider as providers.JsonRpcProvider
+        const currentBlock = await provider.getBlockNumber()
+        
+        if (lastProcessedBlock === undefined) {
+          // Start from current block on first run
+          lastProcessedBlock = currentBlock
+          return
+        }
+        
+        if (currentBlock <= lastProcessedBlock) {
+          return // No new blocks
+        }
+        
+        // Fetch events from last processed block to current
+        const filter = {
+          address: this.entryPoint.address,
+          topics: this.entryPoint.filters.UserOperationEvent().topics,
+          fromBlock: lastProcessedBlock + 1,
+          toBlock: currentBlock
+        }
+        
+        const logs = await getLogsChunked(provider, filter, { maxRange: MAX_RANGE })
+        
+        // Process each log as an event
+        for (const log of logs) {
+          try {
+            const parsedLog = this.entryPoint.interface.parseLog(log)
+            if (parsedLog.name === 'UserOperationEvent') {
+              const event = {
+                ...log,
+                ...parsedLog,
+                args: parsedLog.args,
+                event: parsedLog.name,
+                getTransaction: async () => provider.getTransaction(log.transactionHash),
+                getTransactionReceipt: async () => provider.getTransactionReceipt(log.transactionHash),
+                getBlock: async () => provider.getBlock(log.blockHash)
+              } as any
+              
+              void this.handleEvent(event)
+            }
+          } catch (e) {
+            // Log might be from a different event we don't care about
+            debug('Could not parse log in listener', e)
+          }
+        }
+        
+        lastProcessedBlock = currentBlock
+      } catch (error) {
+        console.error('Error polling for events:', error)
+      }
     }
     
-    this.entryPoint.on(safeFilter, (...args) => {
-      const ev = args.slice(-1)[0]
-      void this.handleEvent(ev as any)
-    })
+    // Start polling
+    pollForEvents() // Initial poll
+    setInterval(pollForEvents, pollInterval)
   }
 
   /**
