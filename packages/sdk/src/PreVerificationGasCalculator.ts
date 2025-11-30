@@ -106,14 +106,27 @@ export const MainnetConfig: PreVerificationGasCalculatorConfig = {
   estimationPaymasterDataSize: 0
 }
 
+const cloneConfig = (config: PreVerificationGasCalculatorConfig, overrides?: Partial<PreVerificationGasCalculatorConfig>): PreVerificationGasCalculatorConfig => {
+  return {
+    ...config,
+    ...(overrides ?? {})
+  }
+}
+
 export const ChainConfigs: { [key: number]: PreVerificationGasCalculatorConfig } = {
   1: MainnetConfig,
+  25: cloneConfig(MainnetConfig, {
+    expectedBundleSize: 1,
+    transactionGasStipend: Number(process.env.BUNDLER_PVG_STIPEND ?? MainnetConfig.transactionGasStipend),
+    fixedGasOverhead: Number(process.env.BUNDLER_PVG_FIXED_OVERHEAD ?? MainnetConfig.fixedGasOverhead),
+    perUserOpGasOverhead: Number(process.env.BUNDLER_PVG_USER_OP_OVERHEAD ?? MainnetConfig.perUserOpGasOverhead)
+  }),
   1337: MainnetConfig
 }
 
 export class PreVerificationGasCalculator {
   constructor (
-    readonly config: PreVerificationGasCalculatorConfig
+    readonly config: PreVerificationGasCalculatorConfig = MainnetConfig
   ) {}
 
   /**
