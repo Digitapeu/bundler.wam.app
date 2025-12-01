@@ -164,6 +164,8 @@ export class MethodHandlerERC4337 {
     const rpcParams = simulationRpcParams('simulateHandleOp', this.entryPoint.address, userOp, [AddressZero, '0x'],
       mergedStateOverride
     )
+
+    console.log('rpcParams', rpcParams)
     const ret = await provider.send('eth_call', rpcParams)
       .catch((e: any) => { throw this.wrapSimulationError('simulateHandleOp', e) })
 
