@@ -142,5 +142,7 @@ export const bundlerConfigDefault: Partial<BundlerConfig> = {
   logFetchBlockRange: 500,
   logFetchLookbackBlocks: 20_000,
   revertSelectorHints: {},
-  revertSelectorAbiPaths: []
+  revertSelectorAbiPaths: [
+    'packages/bundler/src/abis/WamKernelFactory.abi.json'
+  ]
 }
