@@ -161,10 +161,7 @@ export class MethodHandlerERC4337 {
       mergedStateOverride
     )
     const ret = await provider.send('eth_call', rpcParams)
-      .catch((e: any) => {
-        const reason = decodeRevertReason(e) as string
-        throw new RpcError(`simulateHandleOp failed: ${reason}`, ValidationErrors.SimulateValidation, { step: 'simulateHandleOp', cause: e })
-      })
+      .catch((e: any) => { throw this.wrapSimulationError('simulateHandleOp', e) })
 
     const returnInfo = decodeSimulateHandleOpResult(ret)
 
@@ -189,8 +186,7 @@ export class MethodHandlerERC4337 {
         }
       ]
     ).then(b => toNumber(b)).catch(err => {
-      const message = err.message.match(/reason="(.*?)"/)?.at(1) ?? err.message ?? 'execution reverted'
-      throw new RpcError(`eth_estimateGas failed: ${message}`, ValidationErrors.UserOperationReverted, { step: 'eth_estimateGas', cause: err })
+      throw this.wrapSimulationError('eth_estimateGas', err)
     })
     // Results from 'estimateGas' assume making a standalone transaction and paying 21'000 gas extra for it
     callGasLimit -= MainnetConfig.transactionGasStipend
@@ -404,6 +400,44 @@ export class MethodHandlerERC4337 {
       }
     }
     return Object.keys(merged).length === 0 ? undefined : merged
+  }
+
+  private wrapSimulationError (step: string, err: any): RpcError {
+    const revertSelector = typeof err?.error?.data === 'string' ? err.error.data.slice(0, 10) : undefined
+    const decoded = (decodeRevertReason(err) as string | undefined) ?? err?.error?.message ?? err?.message
+    const aaCodeMatch = decoded?.match(/(AA\d{2})/)
+    const aaCode = aaCodeMatch?.[1]
+    const hint = aaCode != null ? this.hintForAACode(aaCode) : undefined
+    const messageParts = [`${step} failed`]
+    if (aaCode != null) {
+      messageParts.push(`(${aaCode})`)
+    }
+    if (decoded != null) {
+      messageParts.push(`: ${decoded}`)
+    }
+    const message = messageParts.join(' ')
+    return new RpcError(message, step === 'eth_estimateGas' ? ValidationErrors.UserOperationReverted : ValidationErrors.SimulateValidation, {
+      step,
+      aaCode,
+      revertSelector,
+      revertReason: decoded,
+      hint
+    })
+  }
+
+  private hintForAACode (code: string): string | undefined {
+    const hints: Record<string, string> = {
+      AA21: 'UserOperation signature validation failed',
+      AA22: 'Paymaster validation failed',
+      AA23: 'Account not deployed or initCode reverted',
+      AA24: 'Invalid account signature',
+      AA25: 'Payment validation failed',
+      AA26: 'Post-op validation failed',
+      AA27: 'Time-range constraints violated',
+      AA28: 'Paymaster deposit too low',
+      AA29: 'Unsupported signature aggregator'
+    }
+    return hints[code]
   }
 
   clientVersion (): string {

@@ -140,12 +140,9 @@ export class BundlerServer {
       try {
         res.send(resContent)
       } catch (err: any) {
-        const error = {
-          message: err.message,
-          data: err.data,
-          code: err.code
-        }
-        this.log('failed: ', 'rpc::res.send()', 'error:', JSON.stringify(error))
+        const normalized = this.normalizeRpcError(err)
+        const logPayload = this.formatErrorForLog(normalized)
+        this.log('failed', 'rpc::res.send()', logPayload)
       }
     }
     return rpc.bind(this)
@@ -208,17 +205,9 @@ export class BundlerServer {
         result
       }
     } catch (err: any) {
-      // Try unwrapping RPC error codes wrapped by the Ethers.js library
-      if (err.error instanceof Error) {
-        // eslint-disable-next-line no-ex-assign
-        err = err.error
-      }
-      const error = {
-        message: err.message,
-        data: err.data,
-        code: err.code
-      }
-      this.log('failed: ', method, 'error:', JSON.stringify(error), err)
+      const error = this.normalizeRpcError(err)
+      const logPayload = this.formatErrorForLog(error)
+      this.log('failed', method, '-', logPayload)
       debug('<<', { jsonrpc, id, error })
       return {
         jsonrpc,
@@ -347,5 +336,50 @@ export class BundlerServer {
     if (!this.silent) {
       console.log(...arguments)
     }
+  }
+
+  private normalizeRpcError (err: any): { message: string, data?: any, code?: number } {
+    if (err?.error instanceof Error) {
+      err = err.error
+    }
+    return {
+      message: err?.message ?? 'Unknown error',
+      data: err?.data,
+      code: err?.code
+    }
+  }
+
+  private formatErrorForLog (error: { message: string, data?: any, code?: number }): { message: string, code?: number, data?: any } {
+    return {
+      message: error.message,
+      code: error.code,
+      data: this.sanitizeErrorData(error.data)
+    }
+  }
+
+  private sanitizeErrorData (data: any, depth = 0): any {
+    if (data == null) {
+      return undefined
+    }
+    if (depth > 2) {
+      return '[trimmed]'
+    }
+    if (typeof data === 'string') {
+      return data.length > 256 ? `${data.slice(0, 256)}…` : data
+    }
+    if (Array.isArray(data)) {
+      return data.slice(0, 5).map(item => this.sanitizeErrorData(item, depth + 1))
+    }
+    if (typeof data === 'object') {
+      const sanitized: Record<string, any> = {}
+      Object.entries(data).forEach(([key, value]) => {
+        if (['requestBody', 'body', 'cause'].includes(key)) {
+          return
+        }
+        sanitized[key] = this.sanitizeErrorData(value, depth + 1)
+      })
+      return sanitized
+    }
+    return data
   }
 }
