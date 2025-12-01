@@ -54,6 +54,10 @@ export interface BundlerConfig {
    * Optional list of ABI file paths containing custom errors whose selectors should be decoded automatically.
    */
   revertSelectorAbiPaths?: string[]
+  /**
+   * Directory of the loaded configuration file (automatically populated).
+   */
+  configDir?: string
   // Config overrides for PreVerificationGas calculation
   fixedGasOverhead?: number
   perUserOpGasOverhead?: number
@@ -98,6 +102,7 @@ export const BundlerConfigShape = {
   estimationForceSenderBalance: ow.optional.string,
   revertSelectorHints: ow.optional.object.valuesOfType(ow.string),
   revertSelectorAbiPaths: ow.optional.array.ofType(ow.string),
+  configDir: ow.optional.string,
 
   // Config overrides for PreVerificationGas calculation
   fixedGasOverhead: ow.optional.number,

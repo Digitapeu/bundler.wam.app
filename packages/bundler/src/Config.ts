@@ -1,5 +1,6 @@
 import ow from 'ow'
 import fs from 'fs'
+import path from 'path'
 
 import { BundlerConfig, bundlerConfigDefault, BundlerConfigShape } from './BundlerConfig'
 import { Wallet, Signer } from 'ethers'
@@ -38,7 +39,9 @@ export async function resolveConfiguration (programOpts: any): Promise<{ config:
   let fileConfig: Partial<BundlerConfig> = {}
   const configFileName = programOpts.config
   if (fs.existsSync(configFileName)) {
-    fileConfig = JSON.parse(fs.readFileSync(configFileName, 'ascii'))
+    const resolvedConfigPath = path.resolve(configFileName)
+    fileConfig = JSON.parse(fs.readFileSync(resolvedConfigPath, 'ascii'))
+    fileConfig.configDir = path.dirname(resolvedConfigPath)
   }
   const config = mergeConfigs(bundlerConfigDefault, fileConfig, commandLineParams)
   console.log('Merged configuration:', JSON.stringify(config))

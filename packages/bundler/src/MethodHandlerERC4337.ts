@@ -72,6 +72,7 @@ export class MethodHandlerERC4337 {
   private readonly logFetchLookbackBlocks: number
   private readonly revertSelectorHints: Record<string, string>
   private readonly revertSelectorDecoders: Record<string, (data: string) => string>
+  private readonly abiBaseDirs: string[]
 
   constructor (
     readonly execManager: ExecutionManager,
@@ -87,6 +88,7 @@ export class MethodHandlerERC4337 {
       Object.entries(config.revertSelectorHints ?? {}).map(([key, value]) => [key.toLowerCase(), value])
     )
     this.revertSelectorDecoders = {}
+    this.abiBaseDirs = this.buildAbiBaseDirs(config.configDir)
     this.extendSelectorHintsFromAbis(config.revertSelectorAbiPaths ?? [])
   }
 
@@ -627,16 +629,28 @@ export class MethodHandlerERC4337 {
   }
 
   private resolveAbiPath (abiPath: string): string | undefined {
-    const candidates: string[] = []
     if (path.isAbsolute(abiPath)) {
-      candidates.push(abiPath)
-    } else {
-      candidates.push(path.resolve(process.cwd(), abiPath))
-      candidates.push(path.resolve(__dirname, abiPath))
-      candidates.push(path.resolve(__dirname, '..', abiPath))
-      candidates.push(path.resolve(__dirname, '..', '..', abiPath))
+      return fs.existsSync(abiPath) ? abiPath : undefined
     }
-    return candidates.find(candidate => fs.existsSync(candidate))
+    for (const base of this.abiBaseDirs) {
+      const candidate = path.resolve(base, abiPath)
+      if (fs.existsSync(candidate)) {
+        return candidate
+      }
+    }
+    return undefined
+  }
+
+  private buildAbiBaseDirs (configDir?: string): string[] {
+    const dirs = new Set<string>()
+    dirs.add(process.cwd())
+    dirs.add(__dirname)
+    dirs.add(path.resolve(__dirname, '..'))
+    dirs.add(path.resolve(__dirname, '..', '..'))
+    if (configDir != null) {
+      dirs.add(configDir)
+    }
+    return Array.from(dirs)
   }
 
   clientVersion (): string {
