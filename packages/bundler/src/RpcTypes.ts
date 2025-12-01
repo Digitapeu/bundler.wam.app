@@ -6,7 +6,7 @@ import { UserOperation } from '@account-abstraction/utils'
  * RPC calls input and return types
  */
 
-export interface StateOverride {
+export interface AccountOverride {
   /**
    * Fake balance to set for the account before executing the call.
    */
@@ -22,12 +22,14 @@ export interface StateOverride {
   /**
    * Fake key-value mapping to override all slots in the account storage before executing the call.
    */
-  state?: Object
+  state?: Record<string, BigNumberish>
   /**
    * Fake key-value mapping to override individual slots in the account storage before executing the call.
    */
-  stateDiff?: Object
+  stateDiff?: Record<string, BigNumberish>
 }
+
+export type StateOverride = Record<string, AccountOverride>
 
 /**
  * return value from estimateUserOpGas

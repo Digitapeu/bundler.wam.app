@@ -33,6 +33,19 @@ export interface BundlerConfig {
   gethDevMode: boolean
 
   eip7702Support: boolean
+  /**
+   * Maximum number of blocks to request per eth_getLogs/queryFilter call.
+   * Helps avoid provider-imposed range limits.
+   */
+  logFetchBlockRange?: number
+  /**
+   * Number of blocks to look back when searching for historical UserOperation events.
+   */
+  logFetchLookbackBlocks?: number
+  /**
+   * Optional balance (in wei) injected via state overrides during gas estimation when the sender is unfunded.
+   */
+  estimationForceSenderBalance?: string
   // Config overrides for PreVerificationGas calculation
   fixedGasOverhead?: number
   perUserOpGasOverhead?: number
@@ -72,6 +85,9 @@ export const BundlerConfigShape = {
   rip7560Mode: ow.string.oneOf(['PULL', 'PUSH']),
   gethDevMode: ow.boolean,
   eip7702Support: ow.boolean,
+  logFetchBlockRange: ow.optional.number,
+  logFetchLookbackBlocks: ow.optional.number,
+  estimationForceSenderBalance: ow.optional.string,
 
   // Config overrides for PreVerificationGas calculation
   fixedGasOverhead: ow.optional.number,
@@ -103,7 +119,7 @@ export const DebugBundlerConfigShape = {
 export const bundlerConfigDefault: Partial<BundlerConfig> = {
   port: '3000',
   privateApiPort: '3001',
-  entryPoint: '0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108',
+  entryPoint: '0x0000000071727De22E5E9d8BAf0edAc6f37da032',
   senderCreator: '0x449ED7C3e6Fee6a97311d4b55475DF59C44AdD33',
   unsafe: false,
   conditionalRpc: false,
@@ -112,5 +128,7 @@ export const bundlerConfigDefault: Partial<BundlerConfig> = {
   rip7560: false,
   rip7560Mode: 'PULL',
   gethDevMode: true,
-  eip7702Support: true
+  eip7702Support: true,
+  logFetchBlockRange: 500,
+  logFetchLookbackBlocks: 20_000
 }

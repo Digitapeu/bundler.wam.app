@@ -64,6 +64,10 @@ export interface EstimateUserOpGasResult {
 }
 
 export class MethodHandlerERC4337 {
+  private lastUserOpEventBlock?: number
+  private readonly logFetchBlockRange: number
+  private readonly logFetchLookbackBlocks: number
+
   constructor (
     readonly execManager: ExecutionManager,
     readonly provider: JsonRpcProvider,
@@ -72,6 +76,8 @@ export class MethodHandlerERC4337 {
     readonly entryPoint: IEntryPoint,
     public preVerificationGasCalculator: PreVerificationGasCalculator
   ) {
+    this.logFetchBlockRange = Math.max(1, config.logFetchBlockRange ?? 500)
+    this.logFetchLookbackBlocks = Math.max(this.logFetchBlockRange, config.logFetchLookbackBlocks ?? 20_000)
   }
 
   async getSupportedEntryPoints (): Promise<string[]> {
@@ -89,15 +95,20 @@ export class MethodHandlerERC4337 {
     return beneficiary
   }
 
-  async _validateParameters (userOp1: UserOperation, entryPointInput: string, requireSignature = true, requireGasParams = true): Promise<void> {
-    requireCond(entryPointInput != null, 'No entryPoint param', -32602)
+  async _validateParameters (
+    userOp1: Partial<UserOperation>,
+    entryPointInput: string,
+    requireSignature = true,
+    requireGasParams = true
+  ): Promise<void> {
+    requireCond(entryPointInput != null, 'No entryPoint param', ValidationErrors.InvalidFields)
 
     if (entryPointInput?.toString().toLowerCase() !== this.config.entryPoint.toLowerCase()) {
       throw new Error(`The EntryPoint at "${entryPointInput}" is not supported. This bundler uses ${this.config.entryPoint}`)
     }
     // minimal sanity check: userOp exists, and all members are hex
     requireCond(userOp1 != null, 'No UserOperation param', ValidationErrors.InvalidFields)
-    const userOp = userOp1 as any
+    const userOp = deepHexlify(userOp1) as any
 
     const fields = ['sender', 'nonce', 'callData']
     if (requireSignature) {
@@ -107,9 +118,9 @@ export class MethodHandlerERC4337 {
       fields.push('preVerificationGas', 'verificationGasLimit', 'callGasLimit', 'maxFeePerGas', 'maxPriorityFeePerGas')
     }
     fields.forEach(key => {
-      requireCond(userOp[key] != null, 'Missing userOp field: ' + key, -32602)
+      requireCond(userOp[key] != null, 'Missing userOp field: ' + key, ValidationErrors.InvalidFields)
       const value: string = userOp[key].toString()
-      requireCond(value.match(HEX_REGEX) != null, `Invalid hex value for property ${key}:${value} in UserOp`, -32602)
+      requireCond(value.match(HEX_REGEX) != null, `Invalid hex value for property ${key}:${value} in UserOp`, ValidationErrors.InvalidFields)
     })
     requireAddressAndFields(userOp, 'paymaster', ['paymasterPostOpGasLimit', 'paymasterVerificationGasLimit'], ['paymasterData'])
     if (userOp1.factory !== EIP_7702_MARKER_INIT_CODE) {
@@ -137,24 +148,23 @@ export class MethodHandlerERC4337 {
       maxPriorityFeePerGas: 0,
       preVerificationGas: 0,
       verificationGasLimit: 10e6,
+      callData: userOp1.callData ?? '0x',
+      initCode: userOp1.initCode ?? '0x',
+      paymasterAndData: userOp1.paymasterAndData ?? '0x',
+      signature: userOp1.signature ?? '0x',
       ...userOp1
     } as any
-    // todo: checks the existence of parameters, but since we hexlify the inputs, it fails to validate
-    await this._validateParameters(deepHexlify(userOp), entryPointInput)
-    // todo: validation manager duplicate?
+    await this._validateParameters(userOp, entryPointInput, false, false)
     const provider = this.provider
+    const mergedStateOverride = this.mergeStateOverrides(userOp, stateOverride)
     const rpcParams = simulationRpcParams('simulateHandleOp', this.entryPoint.address, userOp, [AddressZero, '0x'],
-      stateOverride
-      // {
-      // allow estimation when account's balance is zero.
-      // todo: need a way to flag this, and not enable always.
-      // [userOp.sender]: {
-      //   balance: hexStripZeros(parseEther('1').toHexString())
-      // }
-      // }
+      mergedStateOverride
     )
     const ret = await provider.send('eth_call', rpcParams)
-      .catch((e: any) => { throw new RpcError(decodeRevertReason(e) as string, ValidationErrors.SimulateValidation) })
+      .catch((e: any) => {
+        const reason = decodeRevertReason(e) as string
+        throw new RpcError(`simulateHandleOp failed: ${reason}`, ValidationErrors.SimulateValidation, { step: 'simulateHandleOp', cause: e })
+      })
 
     const returnInfo = decodeSimulateHandleOpResult(ret)
 
@@ -167,7 +177,7 @@ export class MethodHandlerERC4337 {
     } = returnInfo
 
     const authorizationList = getAuthorizationList(userOp)
-    // todo: use simulateHandleOp for this too...
+    // simulateHandleOp currently doesn't expose execution gas, so we still need a dedicated eth_estimateGas call.
     let callGasLimit = await this.provider.send(
       'eth_estimateGas', [
         {
@@ -179,13 +189,19 @@ export class MethodHandlerERC4337 {
         }
       ]
     ).then(b => toNumber(b)).catch(err => {
-      const message = err.message.match(/reason="(.*?)"/)?.at(1) ?? 'execution reverted'
-      throw new RpcError(message, ValidationErrors.UserOperationReverted)
+      const message = err.message.match(/reason="(.*?)"/)?.at(1) ?? err.message ?? 'execution reverted'
+      throw new RpcError(`eth_estimateGas failed: ${message}`, ValidationErrors.UserOperationReverted, { step: 'eth_estimateGas', cause: err })
     })
     // Results from 'estimateGas' assume making a standalone transaction and paying 21'000 gas extra for it
     callGasLimit -= MainnetConfig.transactionGasStipend
+    if (callGasLimit < 0) {
+      callGasLimit = 0
+    }
 
     const preVerificationGas = this.preVerificationGasCalculator.estimatePreVerificationGas(userOp, {})
+    if (!Number.isFinite(Number(preVerificationGas))) {
+      throw new RpcError('Unable to estimate preVerificationGas', ValidationErrors.InternalError, { step: 'preVerificationGas' })
+    }
     const verificationGasLimit = BigNumber.from(preOpGas).toNumber()
     return {
       preVerificationGas,
@@ -208,9 +224,32 @@ export class MethodHandlerERC4337 {
   }
 
   async _getUserOperationEvent (userOpHash: string): Promise<UserOperationEventEvent> {
-    // TODO: eth_getLogs is throttled. must be acceptable for finding a UserOperation by hash
-    const event = await this.entryPoint.queryFilter(this.entryPoint.filters.UserOperationEvent(userOpHash))
-    return event[0]
+    const currentBlock = await this.provider.getBlockNumber()
+    const defaultStartBlock = Math.max(0, currentBlock - this.logFetchLookbackBlocks)
+    const startBlock = Math.max(defaultStartBlock, (this.lastUserOpEventBlock ?? defaultStartBlock))
+    const filter = this.entryPoint.filters.UserOperationEvent(userOpHash)
+
+    let fromBlock = startBlock
+    while (fromBlock <= currentBlock) {
+      const toBlock = Math.min(fromBlock + this.logFetchBlockRange - 1, currentBlock)
+      let events: UserOperationEventEvent[]
+      try {
+        events = await this.queryFilterWithAdaptiveRange(filter, fromBlock, toBlock)
+      } catch (err: any) {
+        throw this.wrapLogFetchError(err, fromBlock, toBlock)
+      }
+      if (events.length > 0) {
+        const event = events[0]
+        this.lastUserOpEventBlock = event.blockNumber
+        return event
+      }
+      fromBlock = toBlock + 1
+    }
+    throw new RpcError(
+      `Unable to locate UserOperationEvent for hash ${userOpHash} within the last ${this.logFetchLookbackBlocks} blocks`,
+      ValidationErrors.InvalidRequest,
+      { userOpHash, searchedFrom: startBlock, searchedTo: currentBlock }
+    )
   }
 
   // filter full bundle logs, and leave only logs for the given userOpHash
@@ -219,7 +258,7 @@ export class MethodHandlerERC4337 {
   _filterLogs (userOpEvent: UserOperationEventEvent, logs: Log[]): Log[] {
     let startIndex = -1
     let endIndex = -1
-    const events = Object.values(this.entryPoint.interface.events)
+    const events = Object.values(this.entryPoint.interface.events) as EventFragment[]
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     const beforeExecutionTopic = this.entryPoint.interface.getEventTopic(events.find((e: EventFragment) => e.name === 'BeforeExecution')!)
     logs.forEach((log, index) => {
@@ -295,6 +334,76 @@ export class MethodHandlerERC4337 {
       logs,
       receipt
     })
+  }
+
+  private isBlockRangeError (err: any): boolean {
+    const message = (err?.error?.message ?? err?.message ?? '').toLowerCase()
+    return err?.code === -32602 || message.includes('block range') || message.includes('range limit')
+  }
+
+  private wrapLogFetchError (err: any, fromBlock: number, toBlock: number): RpcError {
+    if (err instanceof RpcError) {
+      return new RpcError(
+        `${err.message} (while scanning blocks ${fromBlock}-${toBlock})`,
+        err.code,
+        {
+          ...(err.data ?? {}),
+          fromBlock,
+          toBlock
+        }
+      )
+    }
+    const message = err?.error?.message ?? err?.message ?? 'unknown provider error'
+    const code = err?.code ?? ValidationErrors.InternalError
+    return new RpcError(
+      `Failed to fetch UserOperationEvent logs for blocks ${fromBlock}-${toBlock}: ${message}`,
+      code,
+      {
+        fromBlock,
+        toBlock,
+        cause: message
+      }
+    )
+  }
+
+  private async queryFilterWithAdaptiveRange (
+    filter: any,
+    fromBlock: number,
+    toBlock: number
+  ): Promise<UserOperationEventEvent[]> {
+    if (fromBlock > toBlock) {
+      return []
+    }
+    try {
+      return await this.entryPoint.queryFilter(filter, fromBlock, toBlock)
+    } catch (err: any) {
+      if (this.isBlockRangeError(err) && fromBlock < toBlock) {
+        const mid = Math.floor((fromBlock + toBlock) / 2)
+        const left = await this.queryFilterWithAdaptiveRange(filter, fromBlock, mid)
+        const right = await this.queryFilterWithAdaptiveRange(filter, mid + 1, toBlock)
+        return left.concat(right)
+      }
+      throw err
+    }
+  }
+
+  private mergeStateOverrides (userOp: UserOperation, override?: StateOverride): StateOverride | undefined {
+    const merged: StateOverride = {}
+    if (override != null) {
+      Object.entries(override).forEach(([address, accountOverride]) => {
+        merged[address] = {
+          ...(accountOverride ?? {})
+        }
+      })
+    }
+    if (this.config.estimationForceSenderBalance != null && userOp.sender != null) {
+      const senderAddress = userOp.sender
+      merged[senderAddress] = {
+        ...(merged[senderAddress] ?? {}),
+        balance: merged[senderAddress]?.balance ?? this.config.estimationForceSenderBalance
+      }
+    }
+    return Object.keys(merged).length === 0 ? undefined : merged
   }
 
   clientVersion (): string {
