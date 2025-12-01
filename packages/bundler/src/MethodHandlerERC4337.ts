@@ -126,6 +126,10 @@ export class MethodHandlerERC4337 {
     if (userOp1.factory !== EIP_7702_MARKER_INIT_CODE) {
       requireAddressAndFields(userOp, 'factory', ['factoryData'])
     }
+
+    await this.checkAccountDeployment(userOp)
+    await this.checkPaymaster(userOp)
+    await this.checkFactory(userOp)
   }
 
   /**
@@ -402,17 +406,64 @@ export class MethodHandlerERC4337 {
     return Object.keys(merged).length === 0 ? undefined : merged
   }
 
+  private async checkAccountDeployment (userOp: UserOperation): Promise<void> {
+    const sender = userOp.sender?.toLowerCase()
+    requireCond(sender != null, 'Missing sender in UserOperation', ValidationErrors.InvalidFields)
+    const senderCode = await this.provider.getCode(sender)
+    const hasAccountCode = senderCode != null && senderCode !== '0x'
+    const hasInitCode = userOp.initCode != null && userOp.initCode !== '0x'
+
+    if (!hasAccountCode && !hasInitCode) {
+      throw new RpcError(
+        'Sender account has no code on-chain and initCode was not supplied. Deploy the account or include initCode.',
+        ValidationErrors.InvalidFields,
+        { sender }
+      )
+    }
+
+    if (hasAccountCode && hasInitCode) {
+      throw new RpcError(
+        'Sender account is already deployed but initCode was supplied. Remove initCode to avoid AA23.',
+        ValidationErrors.InvalidFields,
+        { sender }
+      )
+    }
+  }
+
+  private async checkPaymaster (userOp: UserOperation): Promise<void> {
+    if (userOp.paymaster == null) {
+      return
+    }
+    const paymaster = userOp.paymaster.toLowerCase()
+    const code = await this.provider.getCode(paymaster)
+    requireCond(code != null && code !== '0x', 'Paymaster address has no code', ValidationErrors.InvalidFields)
+  }
+
+  private async checkFactory (userOp: UserOperation): Promise<void> {
+    if (userOp.factory == null || userOp.factory === EIP_7702_MARKER_INIT_CODE) {
+      return
+    }
+    const factory = userOp.factory.toLowerCase()
+    const code = await this.provider.getCode(factory)
+    requireCond(code != null && code !== '0x', 'Factory address has no code deployed', ValidationErrors.InvalidFields)
+  }
+
   private wrapSimulationError (step: string, err: any): RpcError {
     const revertSelector = typeof err?.error?.data === 'string' ? err.error.data.slice(0, 10) : undefined
     const decoded = (decodeRevertReason(err) as string | undefined) ?? err?.error?.message ?? err?.message
-    const aaCodeMatch = decoded?.match(/(AA\d{2})/)
-    const aaCode = aaCodeMatch?.[1]
-    const hint = aaCode != null ? this.hintForAACode(aaCode) : undefined
+    const failedOp = this.decodeFailedOp(err)
+    const aaCode = failedOp?.reason?.match(/(AA\d{2})/)?.[1]
+    const hint = this.buildHint(failedOp, aaCode)
     const messageParts = [`${step} failed`]
+    if (failedOp?.opIndex != null) {
+      messageParts.push(`for op ${failedOp.opIndex}`)
+    }
     if (aaCode != null) {
       messageParts.push(`(${aaCode})`)
     }
-    if (decoded != null) {
+    if (failedOp?.reason != null) {
+      messageParts.push(`: ${failedOp.reason}`)
+    } else if (decoded != null) {
       messageParts.push(`: ${decoded}`)
     }
     const message = messageParts.join(' ')
@@ -420,9 +471,62 @@ export class MethodHandlerERC4337 {
       step,
       aaCode,
       revertSelector,
-      revertReason: decoded,
+      revertReason: failedOp?.reason ?? decoded,
+      innerRevertSelector: failedOp?.innerSelector,
+      innerRevertReason: failedOp?.innerReason,
       hint
     })
+  }
+
+  private buildHint (failedOp: { reason?: string, innerReason?: string } | undefined, aaCode: string | undefined): string | undefined {
+    if (failedOp?.innerReason != null && failedOp.innerReason.length > 0) {
+      return failedOp.innerReason
+    }
+    if (aaCode != null) {
+      return this.hintForAACode(aaCode)
+    }
+    return undefined
+  }
+
+  private decodeFailedOp (err: any): { opIndex?: number, reason?: string, innerSelector?: string, innerReason?: string } | undefined {
+    const data = err?.error?.data ?? err?.data
+    if (typeof data !== 'string' || !data.startsWith('0x')) {
+      return undefined
+    }
+    // FailedOp(bytes4=0x65c8fd4d) selector + ABI encoded payload
+    const FAILED_OP_SELECTOR = '0x65c8fd4d'
+    if (!data.startsWith(FAILED_OP_SELECTOR)) {
+      return undefined
+    }
+    try {
+      const decoded = this.entryPoint.interface.decodeErrorResult('FailedOp', data)
+      const opIndex: BigNumberish = decoded[0]
+      const reason: string = decoded[1]
+      const innerData: string = decoded[2]
+      const innerSelector = typeof innerData === 'string' && innerData.length >= 10 ? innerData.slice(0, 10) : undefined
+      let innerReason: string | undefined
+      if (innerData && innerData !== '0x') {
+        innerReason = this.decodeInnerRevert(innerData)
+      }
+      return {
+        opIndex: BigNumber.from(opIndex).toNumber(),
+        reason,
+        innerSelector,
+        innerReason
+      }
+    } catch {
+      return undefined
+    }
+  }
+
+  private decodeInnerRevert (data: string): string | undefined {
+    try {
+      const reason = decodeRevertReason({ error: { data } })
+      if (typeof reason === 'string' && reason.length > 0) {
+        return reason
+      }
+    } catch {}
+    return undefined
   }
 
   private hintForAACode (code: string): string | undefined {
