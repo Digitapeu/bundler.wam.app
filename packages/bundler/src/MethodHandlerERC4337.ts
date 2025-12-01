@@ -3,6 +3,7 @@ import { BigNumber, BigNumberish, Signer } from 'ethers'
 import { EventFragment } from '@ethersproject/abi'
 import { JsonRpcProvider, Log } from '@ethersproject/providers'
 import { toNumber } from '@nomicfoundation/hardhat-network-helpers/dist/src/utils'
+import { defaultAbiCoder } from 'ethers/lib/utils'
 
 import { MainnetConfig, PreVerificationGasCalculator } from '@account-abstraction/sdk'
 
@@ -165,7 +166,6 @@ export class MethodHandlerERC4337 {
       mergedStateOverride
     )
 
-    console.log('rpcParams', rpcParams)
     const ret = await provider.send('eth_call', rpcParams)
       .catch((e: any) => { throw this.wrapSimulationError('simulateHandleOp', e) })
 
@@ -454,7 +454,7 @@ export class MethodHandlerERC4337 {
     const revertSelector = typeof err?.error?.data === 'string' ? err.error.data.slice(0, 10) : undefined
     const decoded = (decodeRevertReason(err) as string | undefined) ?? err?.error?.message ?? err?.message
     const failedOp = this.decodeFailedOp(err)
-    const aaCode = failedOp?.reason?.match(/(AA\d{2})/)?.[1]
+    const aaCode = this.extractAACode(failedOp?.reason ?? decoded)
     const hint = this.buildHint(failedOp, aaCode)
     const messageParts = [`${step} failed`]
     if (failedOp?.opIndex != null) {
@@ -463,10 +463,12 @@ export class MethodHandlerERC4337 {
     if (aaCode != null) {
       messageParts.push(`(${aaCode})`)
     }
-    if (failedOp?.reason != null) {
-      messageParts.push(`: ${failedOp.reason}`)
-    } else if (decoded != null) {
-      messageParts.push(`: ${decoded}`)
+    const baseReason = failedOp?.reason ?? decoded
+    if (baseReason != null) {
+      messageParts.push(`: ${baseReason}`)
+    }
+    if (failedOp?.innerSelector != null) {
+      messageParts.push(`[inner revert selector ${failedOp.innerSelector}]`)
     }
     const message = messageParts.join(' ')
     return new RpcError(message, step === 'eth_estimateGas' ? ValidationErrors.UserOperationReverted : ValidationErrors.SimulateValidation, {
@@ -480,9 +482,15 @@ export class MethodHandlerERC4337 {
     })
   }
 
-  private buildHint (failedOp: { reason?: string, innerReason?: string } | undefined, aaCode: string | undefined): string | undefined {
+  private buildHint (
+    failedOp: { reason?: string, innerReason?: string, innerSelector?: string } | undefined,
+    aaCode: string | undefined
+  ): string | undefined {
     if (failedOp?.innerReason != null && failedOp.innerReason.length > 0) {
       return failedOp.innerReason
+    }
+    if (failedOp?.innerSelector != null) {
+      return `Inner revert selector ${failedOp.innerSelector}. Decode using the factory/account ABI for the exact error.`
     }
     if (aaCode != null) {
       return this.hintForAACode(aaCode)
@@ -501,7 +509,13 @@ export class MethodHandlerERC4337 {
       return undefined
     }
     try {
-      const decoded = this.entryPoint.interface.decodeErrorResult('FailedOp', data)
+      let decoded: any
+      try {
+        decoded = this.entryPoint.interface.decodeErrorResult('FailedOp', data)
+      } catch {
+        const raw = '0x' + data.slice(10)
+        decoded = defaultAbiCoder.decode(['uint256', 'string', 'bytes'], raw)
+      }
       const opIndex: BigNumberish = decoded[0]
       const reason: string = decoded[1]
       const innerData: string = decoded[2]
@@ -544,6 +558,14 @@ export class MethodHandlerERC4337 {
       AA29: 'Unsupported signature aggregator'
     }
     return hints[code]
+  }
+
+  private extractAACode (reason?: string): string | undefined {
+    if (reason == null) {
+      return undefined
+    }
+    const match = reason.match(/(AA\d{2})/)
+    return match?.[1]
   }
 
   clientVersion (): string {
