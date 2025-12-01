@@ -71,6 +71,7 @@ export class MethodHandlerERC4337 {
   private readonly logFetchBlockRange: number
   private readonly logFetchLookbackBlocks: number
   private readonly revertSelectorHints: Record<string, string>
+  private readonly revertSelectorDecoders: Record<string, (data: string) => string>
 
   constructor (
     readonly execManager: ExecutionManager,
@@ -85,6 +86,7 @@ export class MethodHandlerERC4337 {
     this.revertSelectorHints = Object.fromEntries(
       Object.entries(config.revertSelectorHints ?? {}).map(([key, value]) => [key.toLowerCase(), value])
     )
+    this.revertSelectorDecoders = {}
     this.extendSelectorHintsFromAbis(config.revertSelectorAbiPaths ?? [])
   }
 
@@ -549,6 +551,13 @@ export class MethodHandlerERC4337 {
 
   private decodeInnerRevert (data: string): string | undefined {
     try {
+      const selector = data.slice(0, 10).toLowerCase()
+      const decoder = this.revertSelectorDecoders[selector]
+      if (decoder != null) {
+        return decoder(data)
+      }
+    } catch {}
+    try {
       const reason = decodeRevertReason({ error: { data } })
       if (typeof reason === 'string' && reason.length > 0) {
         return reason
@@ -583,8 +592,8 @@ export class MethodHandlerERC4337 {
   private extendSelectorHintsFromAbis (pathsToAbis: string[]): void {
     pathsToAbis.forEach(abiPath => {
       try {
-        const resolved = path.isAbsolute(abiPath) ? abiPath : path.resolve(process.cwd(), abiPath)
-        if (!fs.existsSync(resolved)) {
+        const resolved = this.resolveAbiPath(abiPath)
+        if (resolved == null) {
           console.warn('ABI path for revert selector hints not found:', abiPath)
           return
         }
@@ -597,12 +606,37 @@ export class MethodHandlerERC4337 {
             if (this.revertSelectorHints[selector] == null) {
               this.revertSelectorHints[selector] = `Revert ${fragment.format()}`
             }
+            this.revertSelectorDecoders[selector] = (data: string): string => {
+              try {
+                const decoded = iface.decodeErrorResult(fragment, data)
+                const args = fragment.inputs?.map((input, index) => {
+                  const label = input.name && input.name.length > 0 ? input.name : `arg${index}`
+                  return `${label}=${decoded[index]}`
+                }) ?? []
+                return args.length > 0 ? `${fragment.name}(${args.join(', ')})` : `${fragment.name}()`
+              } catch (err) {
+                return `${fragment.name} (failed to decode args: ${(err as Error).message})`
+              }
+            }
           }
         })
       } catch (err) {
         console.warn('Failed to load ABI for revert selector hints:', abiPath, err?.message ?? err)
       }
     })
+  }
+
+  private resolveAbiPath (abiPath: string): string | undefined {
+    const candidates: string[] = []
+    if (path.isAbsolute(abiPath)) {
+      candidates.push(abiPath)
+    } else {
+      candidates.push(path.resolve(process.cwd(), abiPath))
+      candidates.push(path.resolve(__dirname, abiPath))
+      candidates.push(path.resolve(__dirname, '..', abiPath))
+      candidates.push(path.resolve(__dirname, '..', '..', abiPath))
+    }
+    return candidates.find(candidate => fs.existsSync(candidate))
   }
 
   clientVersion (): string {
