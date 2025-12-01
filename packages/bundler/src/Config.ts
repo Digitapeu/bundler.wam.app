@@ -37,13 +37,19 @@ export function getNetworkProvider (url: string): JsonRpcProvider {
 export async function resolveConfiguration (programOpts: any): Promise<{ config: BundlerConfig, provider: JsonRpcProvider, wallet: Signer }> {
   const commandLineParams = getCommandLineParams(programOpts)
   let fileConfig: Partial<BundlerConfig> = {}
-  const configFileName = programOpts.config
-  if (fs.existsSync(configFileName)) {
-    const resolvedConfigPath = path.resolve(configFileName)
+  let resolvedConfigPath = programOpts.config
+  if (fs.existsSync(resolvedConfigPath)) {
+    resolvedConfigPath = path.resolve(resolvedConfigPath)
     fileConfig = JSON.parse(fs.readFileSync(resolvedConfigPath, 'ascii'))
-    fileConfig.configDir = path.dirname(resolvedConfigPath)
   }
-  const config = mergeConfigs(bundlerConfigDefault, fileConfig, commandLineParams)
+  const config = mergeConfigs(
+    { ...bundlerConfigDefault, configDir: process.cwd() },
+    { ...fileConfig, configDir: path.dirname(resolvedConfigPath) },
+    commandLineParams
+  )
+  if (config.configDir == null) {
+    config.configDir = process.cwd()
+  }
   console.log('Merged configuration:', JSON.stringify(config))
 
   if (config.network === 'hardhat') {
