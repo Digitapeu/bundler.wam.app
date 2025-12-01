@@ -643,13 +643,21 @@ export class MethodHandlerERC4337 {
 
   private buildAbiBaseDirs (configDir?: string): string[] {
     const dirs = new Set<string>()
-    dirs.add(process.cwd())
-    dirs.add(__dirname)
-    dirs.add(path.resolve(__dirname, '..'))
-    dirs.add(path.resolve(__dirname, '..', '..'))
-    if (configDir != null) {
-      dirs.add(configDir)
+    const add = (dir: string | undefined) => {
+      if (dir != null) {
+        dirs.add(path.resolve(dir))
+      }
     }
+    add(process.cwd())
+    let current = __dirname
+    for (let i = 0; i < 6; i++) {
+      add(current)
+      current = path.resolve(current, '..')
+      if (current === '/' || current === '' || current == null) {
+        break
+      }
+    }
+    add(configDir)
     return Array.from(dirs)
   }
 
