@@ -1,6 +1,8 @@
 import debug from 'debug'
+import fs from 'fs'
+import path from 'path'
 import { BigNumber, BigNumberish, Signer } from 'ethers'
-import { EventFragment } from '@ethersproject/abi'
+import { EventFragment, Interface } from '@ethersproject/abi'
 import { JsonRpcProvider, Log } from '@ethersproject/providers'
 import { toNumber } from '@nomicfoundation/hardhat-network-helpers/dist/src/utils'
 import { defaultAbiCoder } from 'ethers/lib/utils'
@@ -68,6 +70,7 @@ export class MethodHandlerERC4337 {
   private lastUserOpEventBlock?: number
   private readonly logFetchBlockRange: number
   private readonly logFetchLookbackBlocks: number
+  private readonly revertSelectorHints: Record<string, string>
 
   constructor (
     readonly execManager: ExecutionManager,
@@ -79,6 +82,10 @@ export class MethodHandlerERC4337 {
   ) {
     this.logFetchBlockRange = Math.max(1, config.logFetchBlockRange ?? 500)
     this.logFetchLookbackBlocks = Math.max(this.logFetchBlockRange, config.logFetchLookbackBlocks ?? 20_000)
+    this.revertSelectorHints = Object.fromEntries(
+      Object.entries(config.revertSelectorHints ?? {}).map(([key, value]) => [key.toLowerCase(), value])
+    )
+    this.extendSelectorHintsFromAbis(config.revertSelectorAbiPaths ?? [])
   }
 
   async getSupportedEntryPoints (): Promise<string[]> {
@@ -490,6 +497,11 @@ export class MethodHandlerERC4337 {
       return failedOp.innerReason
     }
     if (failedOp?.innerSelector != null) {
+      const selector = failedOp.innerSelector.toLowerCase()
+      const known = this.revertSelectorHints[selector]
+      if (known != null) {
+        return known
+      }
       return `Inner revert selector ${failedOp.innerSelector}. Decode using the factory/account ABI for the exact error.`
     }
     if (aaCode != null) {
@@ -566,6 +578,31 @@ export class MethodHandlerERC4337 {
     }
     const match = reason.match(/(AA\d{2})/)
     return match?.[1]
+  }
+
+  private extendSelectorHintsFromAbis (pathsToAbis: string[]): void {
+    pathsToAbis.forEach(abiPath => {
+      try {
+        const resolved = path.isAbsolute(abiPath) ? abiPath : path.resolve(process.cwd(), abiPath)
+        if (!fs.existsSync(resolved)) {
+          console.warn('ABI path for revert selector hints not found:', abiPath)
+          return
+        }
+        const content = fs.readFileSync(resolved, 'utf8')
+        const abiJson = JSON.parse(content)
+        const iface = new Interface(abiJson)
+        iface.fragments.forEach(fragment => {
+          if (fragment.type === 'error') {
+            const selector = iface.getSighash(fragment).toLowerCase()
+            if (this.revertSelectorHints[selector] == null) {
+              this.revertSelectorHints[selector] = `Revert ${fragment.format()}`
+            }
+          }
+        })
+      } catch (err) {
+        console.warn('Failed to load ABI for revert selector hints:', abiPath, err?.message ?? err)
+      }
+    })
   }
 
   clientVersion (): string {

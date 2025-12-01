@@ -46,6 +46,14 @@ export interface BundlerConfig {
    * Optional balance (in wei) injected via state overrides during gas estimation when the sender is unfunded.
    */
   estimationForceSenderBalance?: string
+  /**
+   * Optional mapping of custom revert selectors (lowercase hex with 0x prefix) to descriptive messages.
+   */
+  revertSelectorHints?: Record<string, string>
+  /**
+   * Optional list of ABI file paths containing custom errors whose selectors should be decoded automatically.
+   */
+  revertSelectorAbiPaths?: string[]
   // Config overrides for PreVerificationGas calculation
   fixedGasOverhead?: number
   perUserOpGasOverhead?: number
@@ -88,6 +96,8 @@ export const BundlerConfigShape = {
   logFetchBlockRange: ow.optional.number,
   logFetchLookbackBlocks: ow.optional.number,
   estimationForceSenderBalance: ow.optional.string,
+  revertSelectorHints: ow.optional.object.valuesOfType(ow.string),
+  revertSelectorAbiPaths: ow.optional.array.ofType(ow.string),
 
   // Config overrides for PreVerificationGas calculation
   fixedGasOverhead: ow.optional.number,
@@ -130,5 +140,7 @@ export const bundlerConfigDefault: Partial<BundlerConfig> = {
   gethDevMode: true,
   eip7702Support: true,
   logFetchBlockRange: 500,
-  logFetchLookbackBlocks: 20_000
+  logFetchLookbackBlocks: 20_000,
+  revertSelectorHints: {},
+  revertSelectorAbiPaths: []
 }
