@@ -177,6 +177,8 @@ export class MethodHandlerERC4337 {
       mergedStateOverride
     )
 
+    console.log('rpcParams', rpcParams)
+
     const ret = await provider.send('eth_call', rpcParams)
       .catch((e: any) => { throw this.wrapSimulationError('simulateHandleOp', e) })
 
