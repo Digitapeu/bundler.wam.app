@@ -5,6 +5,7 @@ import {
   deployEntryPoint,
   erc4337RuntimeVersion,
   IEntryPoint,
+  IEntryPoint__factory,
   RpcError,
   supportsRpcMethod
 } from '@account-abstraction/utils'
@@ -117,7 +118,6 @@ export async function runBundler (argv: string[], overrideExit = true): Promise<
     // name: chainName,
     chainId
   } = await provider.getNetwork()
-
   if (chainId === 31337 || chainId === 1337) {
     if (config.debugRpc == null) {
       console.log('== debugrpc was', config.debugRpc)
@@ -174,15 +174,17 @@ export async function runBundler (argv: string[], overrideExit = true): Promise<
     }
   }
 
-  const {
-    entryPoint
-  } = await connectContracts(wallet, !config.rip7560)
+  const shouldDeployEntryPoint = !config.rip7560 && [1337, 31337].includes(chainId)
+  const { entryPoint: deployedEntryPoint } = await connectContracts(wallet, shouldDeployEntryPoint)
 
-  if (entryPoint != null && entryPoint?.address?.toLowerCase() !== config.entryPoint.toLowerCase() && [1337, 31337].includes(chainId)) {
-    console.warn('NOTICE: overriding config entrypoint: ', { entryPoint: entryPoint.address })
-    config.entryPoint = entryPoint.address
-    config.senderCreator = await entryPoint.senderCreator()
+  if (deployedEntryPoint != null && deployedEntryPoint.address.toLowerCase() !== config.entryPoint.toLowerCase()) {
+    console.warn('NOTICE: overriding config entrypoint: ', { entryPoint: deployedEntryPoint.address })
+    config.entryPoint = deployedEntryPoint.address
+    config.senderCreator = await deployedEntryPoint.senderCreator()
   }
+  const resolvedEntryPoint =
+    deployedEntryPoint ??
+    IEntryPoint__factory.connect(config.entryPoint, wallet)
 
   // bundleSize=1 replicate current immediate bundling mode
   const execManagerConfig = {
@@ -206,8 +208,7 @@ export async function runBundler (argv: string[], overrideExit = true): Promise<
     provider,
     wallet,
     config,
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    entryPoint!,
+    resolvedEntryPoint,
     preVerificationGasCalculator
   )
   const methodHandlerRip7560 = new MethodHandlerRIP7560(
