@@ -16,7 +16,11 @@ const decodeRevertReasonContracts = new Interface([
 export function decodeRevertReason (data: string | Error, nullIfNoMatch = true): string | null {
   if (typeof data !== 'string') {
     const err = data as any
-    data = (err.data?.data ?? err.data ?? err.error.data) as string
+    data = (err.data?.data ?? err.data ?? err.error?.data) as string
+  }
+  // Guard against undefined data
+  if (data == null || typeof data !== 'string' || data.length < 10) {
+    return nullIfNoMatch ? null : String(data ?? 'unknown error')
   }
   const methodSig = data.slice(0, 10)
   const dataParams = '0x' + data.slice(10)
