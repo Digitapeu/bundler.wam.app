@@ -82,7 +82,8 @@ export async function debug_traceCall (provider: JsonRpcProvider, tx: Deferrable
 }
 
 export function gethHex (n: BigNumberish): string {
-  return BigNumber.from(n).toHexString().replace(/0x0(.)/, '0x$1')
+  // return BigNumber.from(n).toHexString().replace(/0x0(.)/, '0x$1')
+  return BigNumber.from(n).toHexString().replace(/^0x0+(?=[\da-f])/, '0x')
 }
 
 // eslint-disable-next-line @typescript-eslint/naming-convention

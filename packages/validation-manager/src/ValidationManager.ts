@@ -1,4 +1,5 @@
-import { BigNumber, BigNumberish } from 'ethers'
+import { BigNumber, BigNumberish, utils } from 'ethers'
+const { hexStripZeros } = utils
 
 import { JsonRpcProvider } from '@ethersproject/providers'
 import Debug from 'debug'
@@ -215,7 +216,7 @@ export class ValidationManager implements IValidationManager {
       to: this.entryPoint.address,
       data,
       authorizationList: userOp.eip7702Auth == null ? null : [userOp.eip7702Auth],
-      gas: sum(prevg, userOp.verificationGasLimit, userOp.paymasterVerificationGasLimit).hexValue()
+      gas: hexStripZeros(sum(prevg, userOp.verificationGasLimit, userOp.paymasterVerificationGasLimit).toHexString())
     }
 
     try {
@@ -264,7 +265,7 @@ export class ValidationManager implements IValidationManager {
       from: AddressZero,
       to: this.entryPoint.address,
       data: handleOpsData,
-      gasLimit: simulationGas.hexValue(),
+      gasLimit: hexStripZeros(simulationGas.toHexString()),
       authorizationList: userOp.eip7702Auth == null ? null : [userOp.eip7702Auth]
     } as any, {
       tracer,
