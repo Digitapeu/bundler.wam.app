@@ -257,7 +257,8 @@ export class BundleManager implements IBundleManager {
     }
     // TODO: not clear why but 'eth_estimateGas' gives an 'execution reverted' error
     // txData.gasLimit = await this.provider.send('eth_estimateGas', [txData])
-    txData.gasLimit = 10_000_000
+    // txData.gasLimit = 10_000_000
+    txData.gasLimit = hexlify(10_000_000) as PrefixedHexString
     const objectTx = new EOACode7702Transaction(txData, { common })
     const privateKey = Buffer.from(
       // @ts-ignore

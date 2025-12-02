@@ -128,24 +128,24 @@ export class BundleManagerRIP7560 extends BundleManager {
     return bundleHash
   }
 
-  async getPaymasterBalance (paymaster: string): Promise<BigNumber> {
-    // RIP-7560 bundler fix: Check EntryPoint deposit, not native balance
-    // The paymaster deposits CRO to EntryPoint, not to its own address
-    if (this.entryPoint != null) {
-      return await this.entryPoint.balanceOf(paymaster)
-    }
-    // Fallback to native balance if no entryPoint (shouldn't happen with ERC-4337 paymasters)
-    return await this.provider.getBalance(paymaster)
-  }
+  // async getPaymasterBalance (paymaster: string): Promise<BigNumber> {
+  //   // RIP-7560 bundler fix: Check EntryPoint deposit, not native balance
+  //   // The paymaster deposits CRO to EntryPoint, not to its own address
+  //   if (this.entryPoint != null) {
+  //     return await this.entryPoint.balanceOf(paymaster)
+  //   }
+  //   // Fallback to native balance if no entryPoint (shouldn't happen with ERC-4337 paymasters)
+  //   return await this.provider.getBalance(paymaster)
+  // }
 
-  private computeBundleHash (userOps: OperationBase[]): string {
-    const txids: string[] = []
-    for (const userOp of userOps) {
-      txids.push(getRIP7560TransactionHash(userOp as OperationRIP7560))
-    }
-    const bundleRlpEncoding = RLP.encode(txids)
-    const bundleHash = ethers.utils.keccak256(bundleRlpEncoding)
-    console.log('computeBundleHash', txids, hexlify(bundleHash))
-    return hexlify(bundleHash)
-  }
+  // private computeBundleHash (userOps: OperationBase[]): string {
+  //   const txids: string[] = []
+  //   for (const userOp of userOps) {
+  //     txids.push(getRIP7560TransactionHash(userOp as OperationRIP7560))
+  //   }
+  //   const bundleRlpEncoding = RLP.encode(txids)
+  //   const bundleHash = ethers.utils.keccak256(bundleRlpEncoding)
+  //   console.log('computeBundleHash', txids, hexlify(bundleHash))
+  //   return hexlify(bundleHash)
+  // }
 }
