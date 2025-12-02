@@ -129,6 +129,12 @@ export class BundleManagerRIP7560 extends BundleManager {
   }
 
   async getPaymasterBalance (paymaster: string): Promise<BigNumber> {
+    // RIP-7560 bundler fix: Check EntryPoint deposit, not native balance
+    // The paymaster deposits CRO to EntryPoint, not to its own address
+    if (this.entryPoint != null) {
+      return await this.entryPoint.balanceOf(paymaster)
+    }
+    // Fallback to native balance if no entryPoint (shouldn't happen with ERC-4337 paymasters)
     return await this.provider.getBalance(paymaster)
   }
 

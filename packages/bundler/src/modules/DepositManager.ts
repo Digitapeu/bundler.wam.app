@@ -79,7 +79,8 @@ export class DepositManager {
     if (normalized == null) {
       return BigNumber.from(0)
     }
-    const fresh = await this.bundleManager.getPaymasterBalance(normalized)
+    // Use entryPoint.balanceOf directly - bundleManager.getPaymasterBalance has wrong implementation in RIP7560 mode
+    const fresh = await this.entryPoint.balanceOf(normalized)
     this.deposits[normalized] = fresh
     return fresh
   }
