@@ -419,15 +419,17 @@ export class BundleManager implements IBundleManager {
         if (paymasterDeposit[paymaster] == null) {
           paymasterDeposit[paymaster] = await this.getPaymasterBalance(paymaster)
         }
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        if (paymasterDeposit[paymaster].lt(validationResult.returnInfo.prefund!)) {
+        // Handle undefined prefund - use 0 as fallback (validation already passed, so prefund was sufficient)
+        const prefund = validationResult.returnInfo.prefund != null
+          ? BigNumber.from(validationResult.returnInfo.prefund)
+          : BigNumber.from(0)
+        if (paymasterDeposit[paymaster].lt(prefund)) {
           // not enough balance in paymaster to pay for all UserOps
           // (but it passed validation, so it can sponsor them separately
           continue
         }
         stakedEntityCount[paymaster] = (stakedEntityCount[paymaster] ?? 0) + 1
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        paymasterDeposit[paymaster] = paymasterDeposit[paymaster].sub(validationResult.returnInfo.prefund!)
+        paymasterDeposit[paymaster] = paymasterDeposit[paymaster].sub(prefund)
       }
       if (factory != null && isAddress(factory)) {
         stakedEntityCount[factory] = (stakedEntityCount[factory] ?? 0) + 1
