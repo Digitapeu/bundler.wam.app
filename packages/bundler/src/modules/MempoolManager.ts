@@ -54,7 +54,28 @@ export class MempoolManager {
   }
 
   constructor (
-    readonly reputationManager: ReputationManager) {
+    readonly reputationManager: ReputationManager,
+    readonly mempoolTtlMs: number = 5 * 60 * 1000 // 5 minutes default TTL
+  ) {
+    // Start periodic cleanup of expired entries
+    setInterval(() => this.cleanupExpired(), 30 * 1000) // Check every 30 seconds
+  }
+
+  // Remove expired UserOps from mempool
+  cleanupExpired (): number {
+    const before = this.mempool.length
+    const expiredEntries = this.mempool.filter(entry => entry.isExpired(this.mempoolTtlMs))
+    
+    for (const entry of expiredEntries) {
+      debug('removing expired userOp', entry.userOp.sender, entry.userOpHash)
+      this.removeUserOp(entry.userOp)
+    }
+    
+    const removed = before - this.mempool.length
+    if (removed > 0) {
+      debug(`cleaned up ${removed} expired UserOps from mempool`)
+    }
+    return removed
   }
 
   count (): number {

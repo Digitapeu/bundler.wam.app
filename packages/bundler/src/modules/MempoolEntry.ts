@@ -3,6 +3,7 @@ import { OperationBase, ReferencedCodeHashes, UserOperation } from '@account-abs
 
 export class MempoolEntry {
   userOpMaxGas: BigNumber
+  readonly createdAt: number // Timestamp for TTL tracking
 
   constructor (
     readonly userOp: OperationBase,
@@ -18,5 +19,11 @@ export class MempoolEntry {
       .add(this.userOp.verificationGasLimit)
       .add(this.userOp.paymasterVerificationGasLimit ?? 0)
       .add(this.userOp.paymasterPostOpGasLimit ?? 0)
+    this.createdAt = Date.now()
+  }
+
+  // Check if this entry has expired (default 5 minutes)
+  isExpired (ttlMs: number = 5 * 60 * 1000): boolean {
+    return Date.now() - this.createdAt > ttlMs
   }
 }
