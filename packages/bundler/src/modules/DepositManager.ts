@@ -1,4 +1,4 @@
-import { BigNumber } from 'ethers'
+import { BigNumber, BigNumberish } from 'ethers'
 import {
   AddressZero,
   getUserOpMaxCost,
@@ -15,13 +15,24 @@ import { IBundleManager } from './IBundleManager'
  * manage paymaster deposits, to make sure a paymaster has enough gas for all its pending transaction in the mempool
  * [EREP-010]
  */
+interface DepositManagerOptions {
+  headroomBps: number
+  maxPendingOps: number
+}
+
+const DEFAULT_OPTIONS: DepositManagerOptions = {
+  headroomBps: 12_000,
+  maxPendingOps: 20
+}
+
 export class DepositManager {
   private deposits: Record<string, BigNumber> = {}
 
   constructor (
     readonly entryPoint: IEntryPoint,
     readonly mempool: MempoolManager,
-    readonly bundleManager: IBundleManager) {
+    readonly bundleManager: IBundleManager,
+    private readonly options: DepositManagerOptions = DEFAULT_OPTIONS) {
     this.entryPoint.on(this.entryPoint.filters.Deposited(), (...args) => {
       const account = args[0] as string | undefined
       const totalDeposit = args[1] as BigNumber | undefined
@@ -37,13 +48,14 @@ export class DepositManager {
     })
   }
 
-  async checkPaymasterDeposit (userOp: OperationBase): Promise<void> {
+  async checkPaymasterDeposit (userOp: OperationBase, currentPrefund?: BigNumberish): Promise<void> {
     const paymaster = this.normalizeAddress(userOp.paymaster)
     if (paymaster == null || paymaster === AddressZero) {
       return
     }
+    const prefund = this.normalizePrefund(currentPrefund, userOp)
     let deposit = await this.getCachedDeposit(paymaster)
-    const required = this.getRequiredDeposit(paymaster, userOp)
+    const required = this.getRequiredDeposit(paymaster, prefund)
     if (deposit.lt(required)) {
       deposit = await this.refreshDepositFromChain(paymaster)
     }
@@ -92,15 +104,21 @@ export class DepositManager {
     }
   }
 
-  private getRequiredDeposit (paymaster: string, currentOp: OperationBase): BigNumber {
-    let required = BigNumber.from(getUserOpMaxCost(currentOp as UserOperation))
+  private getRequiredDeposit (paymaster: string, currentPrefund: BigNumber): BigNumber {
+    let required = currentPrefund
+    let tracked = 1
+    const maxTracked = Math.max(this.options.maxPendingOps, 1)
     for (const entry of this.mempool.getMempool()) {
       const entryPaymaster = this.normalizeAddress(entry.userOp.paymaster)
       if (entryPaymaster === paymaster) {
-        required = required.add(BigNumber.from(getUserOpMaxCost(entry.userOp as UserOperation)))
+        required = required.add(entry.prefund)
+        tracked++
+        if (tracked >= maxTracked) {
+          break
+        }
       }
     }
-    return required
+    return this.applyHeadroom(required)
   }
 
   private normalizeAddress (addr?: string): string | undefined {
@@ -108,5 +126,20 @@ export class DepositManager {
       return undefined
     }
     return addr.toLowerCase()
+  }
+
+  private normalizePrefund (prefund: BigNumberish | undefined, userOp: OperationBase): BigNumber {
+    if (prefund != null) {
+      return BigNumber.from(prefund)
+    }
+    return BigNumber.from(getUserOpMaxCost(userOp as UserOperation))
+  }
+
+  private applyHeadroom (value: BigNumber): BigNumber {
+    const headroomBps = Math.max(this.options.headroomBps, 0)
+    if (headroomBps === 0) {
+      return value
+    }
+    return value.mul(headroomBps).div(10_000)
   }
 }

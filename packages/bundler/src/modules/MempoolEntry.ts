@@ -3,16 +3,18 @@ import { OperationBase, ReferencedCodeHashes, UserOperation } from '@account-abs
 
 export class MempoolEntry {
   userOpMaxGas: BigNumber
+  readonly prefund: BigNumber
   readonly createdAt: number // Timestamp for TTL tracking
 
   constructor (
     readonly userOp: OperationBase,
     readonly userOpHash: string,
-    readonly prefund: BigNumberish,
+    prefund: BigNumberish,
     readonly referencedContracts: ReferencedCodeHashes,
     readonly skipValidation: boolean,
     readonly aggregator?: string
   ) {
+    this.prefund = BigNumber.from(prefund ?? 0)
     this.userOpMaxGas = BigNumber
       .from((this.userOp as UserOperation).preVerificationGas ?? 0)
       .add(this.userOp.callGasLimit)

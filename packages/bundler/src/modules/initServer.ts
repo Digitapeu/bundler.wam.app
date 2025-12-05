@@ -55,7 +55,10 @@ export function initServer (config: BundlerConfig, signer: Signer): [ExecutionMa
     bundleManager = new BundleManagerRIP7560(entryPoint.provider as JsonRpcProvider, signer, eventsManager, mempoolManager, validationManager, reputationManager,
       config.beneficiary, parseEther(config.minBalance), config.maxBundleGas, config.conditionalRpc, false)
   }
-  const depositManager = new DepositManager(entryPoint, mempoolManager, bundleManager)
+  const depositManager = new DepositManager(entryPoint, mempoolManager, bundleManager, {
+    headroomBps: config.paymasterHeadroomBps,
+    maxPendingOps: config.paymasterMaxPendingOps
+  })
   const executionManager = new ExecutionManager(reputationManager, mempoolManager, bundleManager, validationManager, depositManager, signer, config.rip7560, config.rip7560Mode, config.gethDevMode)
 
   reputationManager.addWhitelist(...config.whitelist ?? [])

@@ -61,7 +61,7 @@ export class ExecutionManager {
         validationResult = await this.validationManager.validateUserOp(userOp)
       }
       const userOpHash = await this.validationManager.getOperationHash(userOp)
-      await this.depositManager.checkPaymasterDeposit(userOp)
+      await this.depositManager.checkPaymasterDeposit(userOp, validationResult.returnInfo?.prefund)
       this.mempoolManager.addUserOp(
         skipValidation,
         userOp,

@@ -33,6 +33,8 @@ export interface BundlerConfig {
   gethDevMode: boolean
 
   eip7702Support: boolean
+  paymasterHeadroomBps: number
+  paymasterMaxPendingOps: number
   /**
    * Maximum number of blocks to request per eth_getLogs/queryFilter call.
    * Helps avoid provider-imposed range limits.
@@ -97,6 +99,8 @@ export const BundlerConfigShape = {
   rip7560Mode: ow.string.oneOf(['PULL', 'PUSH']),
   gethDevMode: ow.boolean,
   eip7702Support: ow.boolean,
+  paymasterHeadroomBps: ow.number,
+  paymasterMaxPendingOps: ow.number,
   logFetchBlockRange: ow.optional.number,
   logFetchLookbackBlocks: ow.optional.number,
   estimationForceSenderBalance: ow.optional.string,
@@ -144,6 +148,8 @@ export const bundlerConfigDefault: Partial<BundlerConfig> = {
   rip7560Mode: 'PULL',
   gethDevMode: true,
   eip7702Support: true,
+  paymasterHeadroomBps: 12_000,
+  paymasterMaxPendingOps: 20,
   logFetchBlockRange: 500,
   logFetchLookbackBlocks: 20_000,
   revertSelectorHints: {},
