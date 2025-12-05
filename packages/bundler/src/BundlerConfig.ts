@@ -150,8 +150,8 @@ export const bundlerConfigDefault: Partial<BundlerConfig> = {
   eip7702Support: true,
   paymasterHeadroomBps: 12_000,
   paymasterMaxPendingOps: 20,
-  logFetchBlockRange: 500,
-  logFetchLookbackBlocks: 20_000,
+  logFetchBlockRange: 100,        // Reduced for Chainstack/provider compatibility
+  logFetchLookbackBlocks: 5_000,  // Reduced for faster queries
   revertSelectorHints: {},
   revertSelectorAbiPaths: [
     'packages/bundler/src/abis/WamKernelFactory.abi.json'
