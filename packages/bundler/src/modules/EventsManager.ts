@@ -15,11 +15,15 @@ const debug = Debug('aa.events')
  */
 export class EventsManager {
   lastBlock?: number
+  private readonly logFetchBlockRange: number
 
   constructor (
     readonly entryPoint: IEntryPoint,
     readonly mempoolManager: MempoolManager,
-    readonly reputationManager: ReputationManager) {
+    readonly reputationManager: ReputationManager,
+    logFetchBlockRange: number = 100
+  ) {
+    this.logFetchBlockRange = Math.max(1, logFetchBlockRange)
   }
 
   /**
@@ -36,19 +40,32 @@ export class EventsManager {
    * process all new events since last run
    */
   async handlePastEvents (): Promise<void> {
+    const currentBlock = await this.entryPoint.provider.getBlockNumber()
     if (this.lastBlock === undefined) {
-      this.lastBlock = Math.max(1, await this.entryPoint.provider.getBlockNumber() - 1000)
+      this.lastBlock = Math.max(1, currentBlock - 1000)
     }
-    try {
-      const events = await this.entryPoint.queryFilter({ address: this.entryPoint.address }, this.lastBlock)
-      for (const ev of events) {
-        this.handleEvent(ev)
+    
+    // Query in chunks to avoid provider block range limits
+    let fromBlock = this.lastBlock
+    while (fromBlock <= currentBlock) {
+      const toBlock = Math.min(fromBlock + this.logFetchBlockRange - 1, currentBlock)
+      try {
+        const events = await this.entryPoint.queryFilter(
+          { address: this.entryPoint.address },
+          fromBlock,
+          toBlock
+        )
+        for (const ev of events) {
+          this.handleEvent(ev)
+        }
+      } catch (e) {
+        // if we processed latest block, then "lastBlock" is set to one above, so the new geth 15.9 error can safely be ignored.
+        if (!(e as Error).message.includes('invalid block range params')) {
+          debug('queryFilter error for blocks %d-%d: %s', fromBlock, toBlock, (e as Error).message)
+          throw e
+        }
       }
-    } catch (e) {
-      // if we processed latest block, then "lastBlock" is set to one above, so the new geth 15.9 error can safely be ignored.
-      if (!(e as Error).message.includes('invalid block range params')) {
-        throw e
-      }
+      fromBlock = toBlock + 1
     }
   }
 
