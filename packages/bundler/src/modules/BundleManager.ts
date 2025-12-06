@@ -99,7 +99,13 @@ export class BundleManager implements IBundleManager {
   }
 
   async handlePastEvents (): Promise<void> {
-    await this.eventsManager.handlePastEvents()
+    try {
+      await this.eventsManager.handlePastEvents()
+    } catch (e: any) {
+      // Don't let event fetching failures block bundling
+      // Block range limits or RPC errors shouldn't prevent sending bundles
+      debug('handlePastEvents failed (non-fatal):', e.message)
+    }
   }
 
   // parse revert from FailedOp(index,str) or FailedOpWithRevert(uint256 opIndex, string reason, bytes inner);
