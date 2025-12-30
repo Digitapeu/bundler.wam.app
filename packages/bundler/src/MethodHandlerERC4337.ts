@@ -238,7 +238,12 @@ export class MethodHandlerERC4337 {
     return await callGetUserOpHashWithCode(this.entryPoint, userOp)
   }
 
-  async _getUserOperationEvent (userOpHash: string): Promise<UserOperationEventEvent> {
+  /**
+   * Find UserOperationEvent by hash
+   * @param userOpHash - The UserOperation hash to search for
+   * @param throwIfNotFound - If true, throws error when not found. If false, returns null.
+   */
+  async _getUserOperationEvent (userOpHash: string, throwIfNotFound: boolean = true): Promise<UserOperationEventEvent | null> {
     const currentBlock = await this.provider.getBlockNumber()
     const defaultStartBlock = Math.max(0, currentBlock - this.logFetchLookbackBlocks)
     const startBlock = Math.max(defaultStartBlock, (this.lastUserOpEventBlock ?? defaultStartBlock))
@@ -251,6 +256,11 @@ export class MethodHandlerERC4337 {
       try {
         events = await this.queryFilterWithAdaptiveRange(filter, fromBlock, toBlock)
       } catch (err: any) {
+        // Don't throw on log fetch errors during receipt polling - just return null
+        if (!throwIfNotFound) {
+          debug('Log fetch error during receipt poll (non-fatal):', (err as Error).message)
+          return null
+        }
         throw this.wrapLogFetchError(err, fromBlock, toBlock)
       }
       if (events.length > 0) {
@@ -260,11 +270,16 @@ export class MethodHandlerERC4337 {
       }
       fromBlock = toBlock + 1
     }
-    throw new RpcError(
-      `Unable to locate UserOperationEvent for hash ${userOpHash} within the last ${this.logFetchLookbackBlocks} blocks`,
-      ValidationErrors.InvalidRequest,
-      { userOpHash, searchedFrom: startBlock, searchedTo: currentBlock }
-    )
+    
+    // Event not found
+    if (throwIfNotFound) {
+      throw new RpcError(
+        `Unable to locate UserOperationEvent for hash ${userOpHash} within the last ${this.logFetchLookbackBlocks} blocks`,
+        ValidationErrors.InvalidRequest,
+        { userOpHash, searchedFrom: startBlock, searchedTo: currentBlock }
+      )
+    }
+    return null
   }
 
   // filter full bundle logs, and leave only logs for the given userOpHash
@@ -301,7 +316,8 @@ export class MethodHandlerERC4337 {
 
   async getUserOperationByHash (userOpHash: string): Promise<UserOperationByHashResponse | null> {
     requireCond(userOpHash?.toString()?.match(HEX_REGEX) != null, 'Missing/invalid userOpHash', -32602)
-    const event = await this._getUserOperationEvent(userOpHash)
+    // Don't throw if event not found - return null per ERC-4337 spec
+    const event = await this._getUserOperationEvent(userOpHash, false)
     if (event == null) {
       return null
     }
@@ -333,7 +349,8 @@ export class MethodHandlerERC4337 {
 
   async getUserOperationReceipt (userOpHash: string): Promise<UserOperationReceipt | null> {
     requireCond(userOpHash?.toString()?.match(HEX_REGEX) != null, 'Missing/invalid userOpHash', -32602)
-    const event = await this._getUserOperationEvent(userOpHash)
+    // Don't throw if event not found - return null so polling can continue
+    const event = await this._getUserOperationEvent(userOpHash, false)
     if (event == null) {
       return null
     }
