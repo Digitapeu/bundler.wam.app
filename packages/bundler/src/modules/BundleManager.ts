@@ -82,8 +82,9 @@ export class BundleManager implements IBundleManager {
     return await this.mutex.runExclusive(async () => {
       debug('sendNextBundle')
 
-      // first flush mempool from already-included UserOps, by actively scanning past events.
-      await this.handlePastEvents()
+      // Fire-and-forget: flush mempool in background - don't block bundle creation
+      // This is safe because duplicate UserOps will fail validation anyway
+      this.handlePastEvents().catch(e => debug('handlePastEvents error (non-blocking):', e.message))
 
       // TODO: pass correct bundle limit parameters!
       const [bundle, eip7702Tuples, storageMap] = await this.createBundle(0, 0, 0)
@@ -176,10 +177,18 @@ export class BundleManager implements IBundleManager {
         ret = rcpt.transactionHash
       } else {
         const resp = await this.signer.sendTransaction(tx)
-        const rcpt = await resp.wait()
-        ret = rcpt.transactionHash
-        // ret = await this.provider.send('eth_sendRawTransaction', [signedTx])
+        // Don't wait for receipt synchronously - just get the hash
+        // This significantly speeds up the bundler response time
+        // Receipt confirmation happens via handlePastEvents()
+        ret = resp.hash
         debug('eth_sendTransaction ret=', ret)
+        
+        // Fire-and-forget: wait for confirmation in background to update mempool faster
+        resp.wait().then(rcpt => {
+          debug('bundle confirmed in block', rcpt.blockNumber)
+        }).catch(err => {
+          debug('bundle confirmation failed', err.message)
+        })
       }
       // TODO: parse ret, and revert if needed.
       debug('ret=', ret)
@@ -381,13 +390,29 @@ export class BundleManager implements IBundleManager {
       }
       let validationResult: ValidateUserOpResult = EmptyValidateUserOpResult
       try {
-        if (!entry.skipValidation) {
+        // Skip re-validation if:
+        // 1. Entry was marked to skip validation (debug injection)
+        // 2. Entry was just validated (within 2 seconds) - no need to re-validate immediately
+        const skipRevalidation = entry.skipValidation || entry.isRecentlyValidated(2000)
+        
+        if (!skipRevalidation) {
           // re-validate UserOp. no need to check stake, since it cannot be reduced between first and 2nd validation
           validationResult = await this.validationManager.validateUserOp(entry.userOp, entry.referencedContracts, false)
         } else {
-          console.warn('Skipping second validation for an injected debug operation, id=', entry.userOpHash)
+          if (entry.skipValidation) {
+            console.warn('Skipping second validation for an injected debug operation, id=', entry.userOpHash)
+          } else {
+            debug('Skipping re-validation for recently validated entry (< 2s old):', entry.userOpHash)
+          }
         }
       } catch (e: any) {
+        // Check if this is a nonce error (AA25) - the tx might have already succeeded!
+        const errorMsg = e?.message ?? ''
+        if (errorMsg.includes('AA25') || errorMsg.includes('invalid account nonce')) {
+          debug('AA25 nonce error during re-validation - tx may have succeeded, removing from mempool:', entry.userOpHash)
+          this.mempoolManager.removeUserOp(entry.userOp)
+          continue // Skip but don't blame - tx likely succeeded
+        }
         await this._handleSecondValidationException(e, paymaster, entry)
         continue
       }

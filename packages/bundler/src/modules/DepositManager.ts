@@ -18,15 +18,22 @@ import { IBundleManager } from './IBundleManager'
 interface DepositManagerOptions {
   headroomBps: number
   maxPendingOps: number
+  cacheTtlMs: number // How long to cache deposit values
 }
 
 const DEFAULT_OPTIONS: DepositManagerOptions = {
   headroomBps: 12_000,
-  maxPendingOps: 20
+  maxPendingOps: 20,
+  cacheTtlMs: 5_000 // 5 second cache for deposits
+}
+
+interface CachedDeposit {
+  value: BigNumber
+  timestamp: number
 }
 
 export class DepositManager {
-  private deposits: Record<string, BigNumber> = {}
+  private deposits: Record<string, CachedDeposit> = {}
 
   constructor (
     readonly entryPoint: IEntryPoint,
@@ -56,7 +63,10 @@ export class DepositManager {
     const prefund = this.normalizePrefund(currentPrefund, userOp)
     let deposit = await this.getCachedDeposit(paymaster)
     const required = this.getRequiredDeposit(paymaster, prefund)
+    
+    // Only refresh if cached deposit is insufficient - saves RPC calls
     if (deposit.lt(required)) {
+      // Force refresh from chain
       deposit = await this.refreshDepositFromChain(paymaster)
     }
 
@@ -68,9 +78,23 @@ export class DepositManager {
   }
 
   /**
-   * clear deposits after some known change on-chain
+   * clear deposits after some known change on-chain (e.g., after bundle sent)
    */
   clearCache (): void {
+    // Only clear stale entries, keep recent ones
+    const now = Date.now()
+    const staleThreshold = this.options.cacheTtlMs * 2 // Clear entries older than 2x TTL
+    for (const addr of Object.keys(this.deposits)) {
+      if (now - this.deposits[addr].timestamp > staleThreshold) {
+        delete this.deposits[addr]
+      }
+    }
+  }
+  
+  /**
+   * Force clear all cached deposits
+   */
+  clearAllCache (): void {
     this.deposits = {}
   }
 
@@ -79,11 +103,16 @@ export class DepositManager {
     if (normalized == null) {
       return BigNumber.from(0)
     }
-    let deposit = this.deposits[normalized]
-    if (deposit == null) {
-      deposit = await this.refreshDepositFromChain(normalized)
+    const cached = this.deposits[normalized]
+    const now = Date.now()
+    
+    // Return cached value if still valid
+    if (cached != null && (now - cached.timestamp) < this.options.cacheTtlMs) {
+      return cached.value
     }
-    return deposit
+    
+    // Cache expired or missing - refresh
+    return await this.refreshDepositFromChain(normalized)
   }
 
   private async refreshDepositFromChain (addr: string): Promise<BigNumber> {
@@ -93,14 +122,14 @@ export class DepositManager {
     }
     // Use entryPoint.balanceOf directly - bundleManager.getPaymasterBalance has wrong implementation in RIP7560 mode
     const fresh = await this.entryPoint.balanceOf(normalized)
-    this.deposits[normalized] = fresh
+    this.deposits[normalized] = { value: fresh, timestamp: Date.now() }
     return fresh
   }
 
   private setCachedDeposit (addr: string, amount: BigNumber): void {
     const normalized = this.normalizeAddress(addr)
     if (normalized != null) {
-      this.deposits[normalized] = amount
+      this.deposits[normalized] = { value: amount, timestamp: Date.now() }
     }
   }
 

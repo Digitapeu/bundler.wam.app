@@ -28,4 +28,10 @@ export class MempoolEntry {
   isExpired (ttlMs: number = 5 * 60 * 1000): boolean {
     return Date.now() - this.createdAt > ttlMs
   }
+
+  // Check if this entry was recently validated (within grace period)
+  // Used to skip re-validation for entries just added to mempool
+  isRecentlyValidated (gracePeriodMs: number = 2000): boolean {
+    return Date.now() - this.createdAt < gracePeriodMs
+  }
 }

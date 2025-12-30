@@ -53,24 +53,34 @@ export class ExecutionManager {
     entryPointInput: string,
     skipValidation: boolean
   ): Promise<void> {
+    // Validation can run outside the mutex - it doesn't modify shared state
+    debug('sendUserOperation - validating')
+    this.validationManager.validateInputParameters(userOp, entryPointInput)
+    
+    let validationResult = EmptyValidateUserOpResult
+    if (!skipValidation) {
+      validationResult = await this.validationManager.validateUserOp(userOp)
+    }
+    
+    // Hash computation doesn't need mutex
+    const userOpHash = await this.validationManager.getOperationHash(userOp)
+    
+    // Only hold mutex for mempool operations
     await this.mutex.runExclusive(async () => {
-      debug('sendUserOperation')
-      this.validationManager.validateInputParameters(userOp, entryPointInput)
-      let validationResult = EmptyValidateUserOpResult
-      if (!skipValidation) {
-        validationResult = await this.validationManager.validateUserOp(userOp)
-      }
-      const userOpHash = await this.validationManager.getOperationHash(userOp)
+      debug('sendUserOperation - adding to mempool')
       await this.depositManager.checkPaymasterDeposit(userOp, validationResult.returnInfo?.prefund)
       this.mempoolManager.addUserOp(
         skipValidation,
         userOp,
         userOpHash,
         validationResult)
-      if (!this.rip7560 || (this.rip7560 && this.useRip7560Mode === 'PUSH')) {
-        await this.attemptBundle(false)
-      }
     })
+    
+    // Bundle attempt outside mutex to avoid blocking other UserOps
+    if (!this.rip7560 || (this.rip7560 && this.useRip7560Mode === 'PUSH')) {
+      // Fire and forget - don't wait for bundle to complete
+      this.attemptBundle(false).catch(e => debug('attemptBundle error:', e.message))
+    }
   }
 
   setReputationCron (interval: number): void {
