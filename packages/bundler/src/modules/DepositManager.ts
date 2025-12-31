@@ -19,12 +19,14 @@ interface DepositManagerOptions {
   headroomBps: number
   maxPendingOps: number
   cacheTtlMs: number // How long to cache deposit values
+  maxCacheSize: number // B2: Maximum number of entries in cache to prevent memory leak
 }
 
 const DEFAULT_OPTIONS: DepositManagerOptions = {
   headroomBps: 12_000,
   maxPendingOps: 20,
-  cacheTtlMs: 5_000 // 5 second cache for deposits
+  cacheTtlMs: 5_000, // 5 second cache for deposits
+  maxCacheSize: 500 // B2: Limit cache to 500 paymasters
 }
 
 interface CachedDeposit {
@@ -33,7 +35,8 @@ interface CachedDeposit {
 }
 
 export class DepositManager {
-  private deposits: Record<string, CachedDeposit> = {}
+  // B2: Use Map for LRU-style eviction
+  private deposits: Map<string, CachedDeposit> = new Map()
 
   constructor (
     readonly entryPoint: IEntryPoint,
@@ -84,18 +87,18 @@ export class DepositManager {
     // Only clear stale entries, keep recent ones
     const now = Date.now()
     const staleThreshold = this.options.cacheTtlMs * 2 // Clear entries older than 2x TTL
-    for (const addr of Object.keys(this.deposits)) {
-      if (now - this.deposits[addr].timestamp > staleThreshold) {
-        delete this.deposits[addr]
+    for (const [addr, entry] of this.deposits.entries()) {
+      if (now - entry.timestamp > staleThreshold) {
+        this.deposits.delete(addr)
       }
     }
   }
-  
+
   /**
    * Force clear all cached deposits
    */
   clearAllCache (): void {
-    this.deposits = {}
+    this.deposits.clear()
   }
 
   async getCachedDeposit (addr: string): Promise<BigNumber> {
@@ -103,14 +106,17 @@ export class DepositManager {
     if (normalized == null) {
       return BigNumber.from(0)
     }
-    const cached = this.deposits[normalized]
+    const cached = this.deposits.get(normalized)
     const now = Date.now()
-    
+
     // Return cached value if still valid
     if (cached != null && (now - cached.timestamp) < this.options.cacheTtlMs) {
+      // B2: Move to end for LRU behavior
+      this.deposits.delete(normalized)
+      this.deposits.set(normalized, cached)
       return cached.value
     }
-    
+
     // Cache expired or missing - refresh
     return await this.refreshDepositFromChain(normalized)
   }
@@ -122,15 +128,26 @@ export class DepositManager {
     }
     // Use entryPoint.balanceOf directly - bundleManager.getPaymasterBalance has wrong implementation in RIP7560 mode
     const fresh = await this.entryPoint.balanceOf(normalized)
-    this.deposits[normalized] = { value: fresh, timestamp: Date.now() }
+    this.setCachedDeposit(normalized, fresh)
     return fresh
   }
 
   private setCachedDeposit (addr: string, amount: BigNumber): void {
     const normalized = this.normalizeAddress(addr)
-    if (normalized != null) {
-      this.deposits[normalized] = { value: amount, timestamp: Date.now() }
+    if (normalized == null) {
+      return
     }
+
+    // B2: Evict oldest entries if at capacity
+    if (this.deposits.size >= this.options.maxCacheSize) {
+      // Delete the first (oldest) entry
+      const firstKey = this.deposits.keys().next().value
+      if (firstKey != null) {
+        this.deposits.delete(firstKey)
+      }
+    }
+
+    this.deposits.set(normalized, { value: amount, timestamp: Date.now() })
   }
 
   private getRequiredDeposit (paymaster: string, currentPrefund: BigNumber): BigNumber {

@@ -31,7 +31,8 @@ export class MempoolEntry {
 
   // Check if this entry was recently validated (within grace period)
   // Used to skip re-validation for entries just added to mempool
-  isRecentlyValidated (gracePeriodMs: number = 2000): boolean {
+  // P2: Extended from 2s to 30s default for chains with longer block times (e.g., Cronos 6s)
+  isRecentlyValidated (gracePeriodMs: number = 30000): boolean {
     return Date.now() - this.createdAt < gracePeriodMs
   }
 }

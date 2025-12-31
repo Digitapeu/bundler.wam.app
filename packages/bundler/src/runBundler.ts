@@ -217,6 +217,11 @@ export async function runBundler (argv: string[], overrideExit = true): Promise<
   )
 
   eventsManager.initEventListener()
+  // F1: Sync past events on startup to catch any missed events from restarts
+  await eventsManager.handlePastEvents().catch(e => {
+    console.warn('Initial event sync failed (non-fatal):', e.message)
+  })
+
   const debugHandler = config.debugRpc ?? false
     ? new DebugMethodHandler(execManager, eventsManager, reputationManager, mempoolManager)
     : new Proxy({}, {

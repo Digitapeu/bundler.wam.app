@@ -67,7 +67,9 @@ export class BundleManager implements IBundleManager {
     // use eth_sendRawTransactionConditional with storage map
     readonly conditionalRpc: boolean,
     // in conditionalRpc: always put root hash (not specific storage slots) for "sender" entries
-    readonly mergeToAccountRootHash: boolean = false
+    readonly mergeToAccountRootHash: boolean = false,
+    // F2: if true, wait for bundle confirmation before returning (ensures receipts are available)
+    readonly waitForConfirmation: boolean = false
   ) {
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     this.entryPoint = _entryPoint!
@@ -177,18 +179,23 @@ export class BundleManager implements IBundleManager {
         ret = rcpt.transactionHash
       } else {
         const resp = await this.signer.sendTransaction(tx)
-        // Don't wait for receipt synchronously - just get the hash
-        // This significantly speeds up the bundler response time
-        // Receipt confirmation happens via handlePastEvents()
         ret = resp.hash
         debug('eth_sendTransaction ret=', ret)
-        
-        // Fire-and-forget: wait for confirmation in background to update mempool faster
-        resp.wait().then(rcpt => {
+
+        if (this.waitForConfirmation) {
+          // F2: Wait for confirmation - ensures receipts are immediately available
+          const rcpt = await resp.wait(1)
           debug('bundle confirmed in block', rcpt.blockNumber)
-        }).catch(err => {
-          debug('bundle confirmation failed', err.message)
-        })
+          // Process events immediately to flush mempool
+          await this.eventsManager.handlePastEvents()
+        } else {
+          // Fire-and-forget: wait for confirmation in background to update mempool faster
+          resp.wait().then(rcpt => {
+            debug('bundle confirmed in block', rcpt.blockNumber)
+          }).catch(err => {
+            debug('bundle confirmation failed', err.message)
+          })
+        }
       }
       // TODO: parse ret, and revert if needed.
       debug('ret=', ret)
@@ -392,8 +399,9 @@ export class BundleManager implements IBundleManager {
       try {
         // Skip re-validation if:
         // 1. Entry was marked to skip validation (debug injection)
-        // 2. Entry was just validated (within 2 seconds) - no need to re-validate immediately
-        const skipRevalidation = entry.skipValidation || entry.isRecentlyValidated(2000)
+        // 2. Entry was just validated (within 30 seconds) - no need to re-validate immediately
+        // P2: Extended from 2s to 30s for chains with longer block times (e.g., Cronos 6s)
+        const skipRevalidation = entry.skipValidation || entry.isRecentlyValidated(30000)
         
         if (!skipRevalidation) {
           // re-validate UserOp. no need to check stake, since it cannot be reduced between first and 2nd validation

@@ -6,6 +6,61 @@ import Debug from 'debug'
 
 import { PreVerificationGasCalculator, PreVerificationGasCalculatorConfig } from '@account-abstraction/sdk'
 
+/**
+ * P3: Simple LRU cache for code hashes with TTL
+ */
+interface CacheEntry<T> {
+  value: T
+  timestamp: number
+}
+
+class CodeHashCache {
+  private cache: Map<string, CacheEntry<string>> = new Map()
+  private readonly maxSize: number
+  private readonly ttlMs: number
+
+  constructor (maxSize: number = 1000, ttlMs: number = 60000) {
+    this.maxSize = maxSize
+    this.ttlMs = ttlMs
+  }
+
+  get (addresses: string[]): string | undefined {
+    const key = this.getKey(addresses)
+    const entry = this.cache.get(key)
+    if (entry == null) {
+      return undefined
+    }
+    if (Date.now() - entry.timestamp > this.ttlMs) {
+      this.cache.delete(key)
+      return undefined
+    }
+    // Move to end (LRU)
+    this.cache.delete(key)
+    this.cache.set(key, entry)
+    return entry.value
+  }
+
+  set (addresses: string[], hash: string): void {
+    const key = this.getKey(addresses)
+    // Evict oldest if at capacity
+    if (this.cache.size >= this.maxSize) {
+      const firstKey = this.cache.keys().next().value
+      if (firstKey != null) {
+        this.cache.delete(firstKey)
+      }
+    }
+    this.cache.set(key, { value: hash, timestamp: Date.now() })
+  }
+
+  private getKey (addresses: string[]): string {
+    return addresses.map(a => a.toLowerCase()).sort().join(',')
+  }
+
+  clear (): void {
+    this.cache.clear()
+  }
+}
+
 import {
   AddressZero,
   CodeHashGetter__factory,
@@ -74,6 +129,8 @@ const MAX_VERIFICATION_GAS_USED = 500_000
  */
 export class ValidationManager implements IValidationManager {
   private readonly provider: JsonRpcProvider
+  // P3: LRU cache for code hashes with 60s TTL
+  private readonly codeHashCache: CodeHashCache = new CodeHashCache(1000, 60000)
 
   constructor (
     readonly entryPoint: IEntryPoint,
@@ -468,11 +525,23 @@ export class ValidationManager implements IValidationManager {
   }
 
   async getCodeHashes (addresses: string[]): Promise<ReferencedCodeHashes> {
+    // P3: Check cache first
+    const cachedHash = this.codeHashCache.get(addresses)
+    if (cachedHash != null) {
+      return {
+        hash: cachedHash,
+        addresses
+      }
+    }
+
     const { hash } = await runContractScript(
       this.entryPoint.provider,
       new CodeHashGetter__factory(),
       [addresses]
     )
+
+    // P3: Cache the result
+    this.codeHashCache.set(addresses, hash)
 
     return {
       hash,

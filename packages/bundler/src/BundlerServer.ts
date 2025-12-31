@@ -123,15 +123,56 @@ export class BundlerServer {
     res.send(`Account-Abstraction Bundler v.${erc4337RuntimeVersion}. please use "/rpc"`)
   }
 
-  // TODO: I don't see how to elegantly combine express callbacks with classes so I ended up with this spaghetti.
-  //  This is temporary and probably should not be merged like that, we need to simplify the flow.
+  // P6: Methods that can be processed in parallel (read-only operations)
+  private readonly parallelMethods = new Set([
+    'eth_chainId',
+    'eth_supportedEntryPoints',
+    'eth_estimateUserOperationGas',
+    'eth_getUserOperationReceipt',
+    'eth_getUserOperationByHash',
+    'web3_clientVersion',
+    'debug_bundler_dumpMempool',
+    'debug_bundler_dumpReputation',
+    'debug_bundler_getStakeStatus'
+  ])
+
+  // P6: Check if a method can be parallelized
+  private canParallelize (method: string): boolean {
+    return this.parallelMethods.has(method)
+  }
+
   getRpc (handleRpc: any): any {
     const rpc = async (req: Request, res: Response): Promise<void> => {
       let resContent: any
       if (Array.isArray(req.body)) {
-        resContent = []
-        for (const reqItem of req.body) {
-          resContent.push(await handleRpc(reqItem))
+        // P6: Separate parallel-safe and sequential methods
+        const parallelItems: Array<{ index: number, item: any }> = []
+        const sequentialItems: Array<{ index: number, item: any }> = []
+
+        req.body.forEach((item: any, index: number) => {
+          if (this.canParallelize(item.method)) {
+            parallelItems.push({ index, item })
+          } else {
+            sequentialItems.push({ index, item })
+          }
+        })
+
+        // Initialize result array
+        resContent = new Array(req.body.length)
+
+        // P6: Process parallel items concurrently
+        if (parallelItems.length > 0) {
+          const parallelResults = await Promise.all(
+            parallelItems.map(async ({ item }) => handleRpc(item))
+          )
+          parallelItems.forEach(({ index }, i) => {
+            resContent[index] = parallelResults[i]
+          })
+        }
+
+        // Process sequential items in order (these modify state)
+        for (const { index, item } of sequentialItems) {
+          resContent[index] = await handleRpc(item)
         }
       } else {
         resContent = await handleRpc(req.body)

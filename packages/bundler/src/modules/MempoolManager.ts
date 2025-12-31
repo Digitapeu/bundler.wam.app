@@ -23,8 +23,17 @@ type MempoolDump = OperationBase[]
 
 const THROTTLED_ENTITY_MEMPOOL_COUNT = 4
 
+/**
+ * P1: Optimized MempoolManager with O(1) lookups using Maps
+ * Instead of linear array scans, we use:
+ * - mempoolBySenderNonce: Map for O(1) lookup by sender+nonce
+ * - mempoolByHash: Map for O(1) lookup by userOpHash
+ */
 export class MempoolManager {
-  private mempool: MempoolEntry[] = []
+  // P1: Primary storage - Map for O(1) lookups by sender+nonce
+  private mempoolBySenderNonce: Map<string, MempoolEntry> = new Map()
+  // P1: Secondary index - Map for O(1) lookups by hash
+  private mempoolByHash: Map<string, MempoolEntry> = new Map()
 
   // count entities in mempool.
   private _entryCount: { [addr: string]: number | undefined } = {}
@@ -61,17 +70,30 @@ export class MempoolManager {
     setInterval(() => this.cleanupExpired(), 30 * 1000) // Check every 30 seconds
   }
 
+  /**
+   * P1: Helper to create composite key for sender+nonce lookup
+   */
+  private getSenderNonceKey (sender: string, nonce: BigNumberish): string {
+    return `${sender.toLowerCase()}-${BigNumber.from(nonce).toString()}`
+  }
+
   // Remove expired UserOps from mempool
   cleanupExpired (): number {
-    const before = this.mempool.length
-    const expiredEntries = this.mempool.filter(entry => entry.isExpired(this.mempoolTtlMs))
-    
-    for (const entry of expiredEntries) {
-      debug('removing expired userOp', entry.userOp.sender, entry.userOpHash)
-      this.removeUserOp(entry.userOp)
+    const before = this.mempoolBySenderNonce.size
+    const expiredHashes: string[] = []
+
+    for (const entry of this.mempoolBySenderNonce.values()) {
+      if (entry.isExpired(this.mempoolTtlMs)) {
+        debug('removing expired userOp', entry.userOp.sender, entry.userOpHash)
+        expiredHashes.push(entry.userOpHash)
+      }
     }
-    
-    const removed = before - this.mempool.length
+
+    for (const hash of expiredHashes) {
+      this.removeUserOp(hash)
+    }
+
+    const removed = before - this.mempoolBySenderNonce.size
     if (removed > 0) {
       debug(`cleaned up ${removed} expired UserOps from mempool`)
     }
@@ -79,7 +101,7 @@ export class MempoolManager {
   }
 
   count (): number {
-    return this.mempool.length
+    return this.mempoolBySenderNonce.size
   }
 
   // add userOp into the mempool, after initial validation.
@@ -100,13 +122,23 @@ export class MempoolManager {
       validationResult.aggregatorInfo?.addr
     )
     const packedNonce = getPackedNonce(entry.userOp)
-    const index = this._findBySenderNonce(userOp.sender, packedNonce)
-    let oldEntry: MempoolEntry | undefined
-    if (index !== -1) {
-      oldEntry = this.mempool[index]
+    const senderNonceKey = this.getSenderNonceKey(userOp.sender, packedNonce)
+
+    // P1: O(1) lookup instead of linear scan
+    const oldEntry = this.mempoolBySenderNonce.get(senderNonceKey)
+
+    if (oldEntry != null) {
       this.checkReplaceUserOp(oldEntry, entry)
       debug('replace userOp', userOp.sender, packedNonce)
-      this.mempool[index] = entry
+
+      // Remove old entry from hash index
+      this.mempoolByHash.delete(oldEntry.userOpHash)
+
+      // Update both maps
+      this.mempoolBySenderNonce.set(senderNonceKey, entry)
+      this.mempoolByHash.set(userOpHash, entry)
+
+      this.updateSeenStatus(oldEntry.aggregator, oldEntry.userOp, validationResult.senderInfo, -1)
     } else {
       debug('add userOp', userOp.sender, packedNonce)
       if (!skipValidation) {
@@ -120,11 +152,12 @@ export class MempoolManager {
       if (userOp.factory != null) {
         this.incrementEntryCount(userOp.factory)
       }
-      this.mempool.push(entry)
+
+      // P1: Add to both maps
+      this.mempoolBySenderNonce.set(senderNonceKey, entry)
+      this.mempoolByHash.set(userOpHash, entry)
     }
-    if (oldEntry != null) {
-      this.updateSeenStatus(oldEntry.aggregator, oldEntry.userOp, validationResult.senderInfo, -1)
-    }
+
     this.updateSeenStatus(validationResult.aggregatorInfo?.addr, userOp, validationResult.senderInfo)
   }
 
@@ -209,36 +242,49 @@ export class MempoolManager {
   }
 
   getSortedForInclusion (): MempoolEntry[] {
-    const copy = Array.from(this.mempool)
+    // P1: Convert map values to array for sorting
+    const entries = Array.from(this.mempoolBySenderNonce.values())
 
     function cost (op: OperationBase): number {
       // TODO: need to consult basefee and maxFeePerGas
       return BigNumber.from(op.maxPriorityFeePerGas).toNumber()
     }
 
-    copy.sort((a, b) => cost(a.userOp) - cost(b.userOp))
-    return copy
+    entries.sort((a, b) => cost(a.userOp) - cost(b.userOp))
+    return entries
   }
 
+  /**
+   * P1: O(1) lookup by sender+nonce - returns entry or undefined
+   */
   _findBySenderNonce (sender: string, nonce: BigNumberish): number {
-    for (let i = 0; i < this.mempool.length; i++) {
-      const curOp = this.mempool[i].userOp
-      const packedNonce = getPackedNonce(curOp)
-      if (curOp.sender === sender && packedNonce.eq(nonce)) {
-        return i
-      }
-    }
-    return -1
+    const key = this.getSenderNonceKey(sender, nonce)
+    // For backward compatibility, return -1 if not found, 0 if found
+    // (callers only check for !== -1)
+    return this.mempoolBySenderNonce.has(key) ? 0 : -1
   }
 
+  /**
+   * P1: O(1) lookup by sender+nonce - returns the entry directly
+   */
+  getBySenderNonce (sender: string, nonce: BigNumberish): MempoolEntry | undefined {
+    const key = this.getSenderNonceKey(sender, nonce)
+    return this.mempoolBySenderNonce.get(key)
+  }
+
+  /**
+   * P1: O(1) lookup by hash - returns entry or undefined
+   */
   _findByHash (hash: string): number {
-    for (let i = 0; i < this.mempool.length; i++) {
-      const curOp = this.mempool[i]
-      if (curOp.userOpHash === hash) {
-        return i
-      }
-    }
-    return -1
+    // For backward compatibility, return -1 if not found, 0 if found
+    return this.mempoolByHash.has(hash) ? 0 : -1
+  }
+
+  /**
+   * P1: O(1) lookup by hash - returns the entry directly
+   */
+  getByHash (hash: string): MempoolEntry | undefined {
+    return this.mempoolByHash.get(hash)
   }
 
   /**
@@ -246,18 +292,29 @@ export class MempoolManager {
    * @param userOpOrHash
    */
   removeUserOp (userOpOrHash: OperationBase | string): void {
-    let index: number
+    let entry: MempoolEntry | undefined
+
     if (typeof userOpOrHash === 'string') {
-      index = this._findByHash(userOpOrHash)
+      // P1: O(1) lookup by hash
+      entry = this.mempoolByHash.get(userOpOrHash)
     } else {
+      // P1: O(1) lookup by sender+nonce
       const packedNonce = getPackedNonce(userOpOrHash)
-      index = this._findBySenderNonce(userOpOrHash.sender, packedNonce)
+      const key = this.getSenderNonceKey(userOpOrHash.sender, packedNonce)
+      entry = this.mempoolBySenderNonce.get(key)
     }
-    if (index !== -1) {
-      const userOp = this.mempool[index].userOp
+
+    if (entry != null) {
+      const userOp = entry.userOp
       const packedNonce = getPackedNonce(userOp)
+      const senderNonceKey = this.getSenderNonceKey(userOp.sender, packedNonce)
+
       debug('removeUserOp', userOp.sender, packedNonce)
-      this.mempool.splice(index, 1)
+
+      // P1: Remove from both maps
+      this.mempoolBySenderNonce.delete(senderNonceKey)
+      this.mempoolByHash.delete(entry.userOpHash)
+
       this.decrementEntryCount(userOp.sender)
       this.decrementEntryCount(userOp.paymaster)
       this.decrementEntryCount(userOp.factory)
@@ -269,14 +326,15 @@ export class MempoolManager {
    * debug: dump mempool content
    */
   dump (): MempoolDump {
-    return this.mempool.map(entry => entry.userOp)
+    return Array.from(this.mempoolBySenderNonce.values()).map(entry => entry.userOp)
   }
 
   /**
    * for debugging: clear current in-memory state
    */
   clearState (): void {
-    this.mempool = []
+    this.mempoolBySenderNonce.clear()
+    this.mempoolByHash.clear()
     this._entryCount = {}
   }
 
@@ -284,9 +342,11 @@ export class MempoolManager {
    * Returns all addresses that are currently known to be "senders" according to the current mempool.
    */
   getKnownSenders (): string[] {
-    return this.mempool.map(it => {
-      return it.userOp.sender.toLowerCase()
-    })
+    const senders: string[] = []
+    for (const entry of this.mempoolBySenderNonce.values()) {
+      senders.push(entry.userOp.sender.toLowerCase())
+    }
+    return senders
   }
 
   /**
@@ -294,31 +354,42 @@ export class MempoolManager {
    * Note that "sender" addresses are not returned by this function. Use {@link getKnownSenders} instead.
    */
   getKnownEntities (): string[] {
-    const res = []
-    const userOps = this.mempool
-    res.push(
-      ...userOps.map(it => it.userOp.paymaster)
-    )
-    res.push(
-      ...userOps.map(it => it.userOp.factory)
-    )
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-    return res.filter(it => it != null).map(it => (it as string).toLowerCase())
+    const res: string[] = []
+    for (const entry of this.mempoolBySenderNonce.values()) {
+      if (entry.userOp.paymaster != null) {
+        res.push(entry.userOp.paymaster.toLowerCase())
+      }
+      if (entry.userOp.factory != null) {
+        res.push(entry.userOp.factory.toLowerCase())
+      }
+    }
+    return res
   }
 
   getMempool (): MempoolEntry[] {
-    return this.mempool
+    return Array.from(this.mempoolBySenderNonce.values())
   }
 
   // GREP-010 A `BANNED` address is not allowed into the mempool
   removeBannedAddr (addr: string): void {
-    // scan mempool in reverse. remove any UserOp where address is any entity
-    for (let i = this.mempool.length - 1; i >= 0; i--) {
-      const mempoolEntry = this.mempool[i]
-      const userOp = mempoolEntry.userOp
-      if (userOp.sender === addr || userOp.paymaster === addr || userOp.factory === addr) {
-        this.removeUserOp(mempoolEntry.userOpHash)
+    const lowerAddr = addr.toLowerCase()
+    const toRemove: string[] = []
+
+    // Collect hashes to remove
+    for (const entry of this.mempoolBySenderNonce.values()) {
+      const userOp = entry.userOp
+      if (
+        userOp.sender.toLowerCase() === lowerAddr ||
+        userOp.paymaster?.toLowerCase() === lowerAddr ||
+        userOp.factory?.toLowerCase() === lowerAddr
+      ) {
+        toRemove.push(entry.userOpHash)
       }
+    }
+
+    // Remove collected entries
+    for (const hash of toRemove) {
+      this.removeUserOp(hash)
     }
   }
 }

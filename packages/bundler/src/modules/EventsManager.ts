@@ -38,34 +38,61 @@ export class EventsManager {
 
   /**
    * process all new events since last run
+   * P4: Parallel chunk fetching for faster event sync
    */
   async handlePastEvents (): Promise<void> {
     const currentBlock = await this.entryPoint.provider.getBlockNumber()
     if (this.lastBlock === undefined) {
       this.lastBlock = Math.max(1, currentBlock - 1000)
     }
-    
-    // Query in chunks to avoid provider block range limits
+
+    // P4: Build list of chunk ranges to fetch in parallel
+    const chunks: Array<{ fromBlock: number, toBlock: number }> = []
     let fromBlock = this.lastBlock
     while (fromBlock <= currentBlock) {
       const toBlock = Math.min(fromBlock + this.logFetchBlockRange - 1, currentBlock)
-      try {
-        const events = await this.entryPoint.queryFilter(
-          { address: this.entryPoint.address },
-          fromBlock,
-          toBlock
-        )
-        for (const ev of events) {
-          this.handleEvent(ev)
-        }
-      } catch (e) {
-        // if we processed latest block, then "lastBlock" is set to one above, so the new geth 15.9 error can safely be ignored.
-        if (!(e as Error).message.includes('invalid block range params')) {
-          debug('queryFilter error for blocks %d-%d: %s', fromBlock, toBlock, (e as Error).message)
-          throw e
-        }
-      }
+      chunks.push({ fromBlock, toBlock })
       fromBlock = toBlock + 1
+    }
+
+    if (chunks.length === 0) {
+      return
+    }
+
+    // P4: Fetch all chunks in parallel (limit concurrency to avoid overwhelming RPC)
+    const MAX_CONCURRENT = 5
+    const allEvents: Array<UserOperationEventEvent | AccountDeployedEvent | SignatureAggregatorChangedEvent> = []
+
+    for (let i = 0; i < chunks.length; i += MAX_CONCURRENT) {
+      const batch = chunks.slice(i, i + MAX_CONCURRENT)
+      const results = await Promise.all(
+        batch.map(async ({ fromBlock, toBlock }) => {
+          try {
+            return await this.entryPoint.queryFilter(
+              { address: this.entryPoint.address },
+              fromBlock,
+              toBlock
+            )
+          } catch (e) {
+            if (!(e as Error).message.includes('invalid block range params')) {
+              debug('queryFilter error for blocks %d-%d: %s', fromBlock, toBlock, (e as Error).message)
+            }
+            return []
+          }
+        })
+      )
+      // Flatten results
+      for (const events of results) {
+        allEvents.push(...events)
+      }
+    }
+
+    // Sort by block number to process in order
+    allEvents.sort((a, b) => a.blockNumber - b.blockNumber)
+
+    // Process all events
+    for (const ev of allEvents) {
+      this.handleEvent(ev)
     }
   }
 

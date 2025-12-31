@@ -36,6 +36,11 @@ export interface BundlerConfig {
   paymasterHeadroomBps: number
   paymasterMaxPendingOps: number
   /**
+   * If true, wait for bundle transaction confirmation before returning.
+   * This ensures receipts are immediately available but adds latency.
+   */
+  waitForConfirmation: boolean
+  /**
    * Maximum number of blocks to request per eth_getLogs/queryFilter call.
    * Helps avoid provider-imposed range limits.
    */
@@ -101,6 +106,7 @@ export const BundlerConfigShape = {
   eip7702Support: ow.boolean,
   paymasterHeadroomBps: ow.number,
   paymasterMaxPendingOps: ow.number,
+  waitForConfirmation: ow.boolean,
   logFetchBlockRange: ow.optional.number,
   logFetchLookbackBlocks: ow.optional.number,
   estimationForceSenderBalance: ow.optional.string,
@@ -150,6 +156,7 @@ export const bundlerConfigDefault: Partial<BundlerConfig> = {
   eip7702Support: true,
   paymasterHeadroomBps: 12_000,
   paymasterMaxPendingOps: 20,
+  waitForConfirmation: false,
   logFetchBlockRange: 100,        // Reduced for Chainstack/provider compatibility
   logFetchLookbackBlocks: 5_000,  // Reduced for faster queries
   revertSelectorHints: {},

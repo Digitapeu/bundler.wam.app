@@ -76,7 +76,9 @@ export function initServer(
             config.beneficiary,
             parseEther(config.minBalance),
             config.maxBundleGas,
-            config.conditionalRpc
+            config.conditionalRpc,
+            false, // mergeToAccountRootHash
+            config.waitForConfirmation ?? false
         )
     } else {
         const erc7562Parser = new ERC7562Parser(AA_ENTRY_POINT, AA_SENDER_CREATOR, AA_NONCE_MANAGER)
