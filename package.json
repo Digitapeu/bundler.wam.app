@@ -14,6 +14,9 @@
       "**eslint**"
     ]
   },
+  "resolutions": {
+    "@openzeppelin/contracts": "5.2.0"
+  },
   "scripts": {
     "bundler": "yarn --cwd packages/bundler bundler",
     "bundler-rip7560": "yarn --cwd packages/bundler bundler-rip7560",
@@ -28,12 +31,13 @@
     "lerna-lint": "lerna run lint --stream --parallel -- ",
     "lerna-test": "lerna run hardhat-test --stream --",
     "lerna-tsc": "lerna run tsc --scope @account-abstraction/*",
+    "runtime-tsc": "yarn --cwd packages/utils tsc && yarn --cwd packages/sdk tsc && yarn --cwd packages/validation-manager tsc",
     "lerna-watch-tsc": "lerna run --stream --parallel watch-tsc",
     "lint-fix": "lerna run lint-fix --parallel",
     "clear": "lerna run clear",
     "hardhat-compile": "lerna run hardhat-compile",
     "preprocess": "yarn preprocess1 && yarn preprocess2",
-    "preprocess2": "yarn lerna-clear && yarn hardhat-compile && yarn lerna-tsc",
+    "preprocess2": "yarn lerna-clear && yarn hardhat-compile && yarn runtime-tsc",
     "preprocess1": "yarn submodule-update && yarn && cd submodules/account-abstraction && yarn && yarn --cwd contracts prepack",
     "submodule-update": "git submodule update --remote --init --recursive",
     "runop-self": "ts-node ./packages/bundler/src/runner/runop.ts --deployFactory --selfBundler --unsafe",
@@ -56,7 +60,7 @@
     "webpack": "^5.74.0",
     "webpack-cli": "^4.10.0"
   },
-  "packageManager": "yarn@1.22.19",
+  "packageManager": "yarn@1.22.22",
   "devDependencies": {
     "patch-package": "^8.0.1"
   }
